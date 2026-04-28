@@ -4,7 +4,10 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 ## Project status
 
-QuestLit is intended to be a Streamlit web app for sharing a portfolio and visualizing trades and the equity curve (per `README.md`). The repo is currently a stub: `main.py` is a `print("Hello from questlit!")` placeholder, `pyproject.toml` declares no dependencies, and there is no Streamlit code, tests, or app structure yet. When asked to add functionality, expect to be scaffolding from scratch rather than fitting into an existing architecture.
+QuestLit is a Streamlit web app for sharing a portfolio and visualizing trades and the equity curve (per `README.md`). Current state:
+- `streamlit_app.py` — minimal Streamlit page rendering current Questrade positions in a table.
+- `main.py` — Typer CLI with `positions` and `token` subcommands, backed by the same `questlit/questrade.py` client.
+- No equity-curve / trade-visualization code yet — still to be scaffolded.
 
 ## Tooling
 
@@ -12,8 +15,20 @@ QuestLit is intended to be a Streamlit web app for sharing a portfolio and visua
 - The combination of `pyproject.toml` + `.python-version` + ignored `.venv` is the [`uv`](https://docs.astral.sh/uv/) layout. Prefer `uv` for dependency and environment management:
   - `uv sync` — create/update the venv from `pyproject.toml`.
   - `uv add <pkg>` — add a runtime dependency (e.g. `uv add streamlit`).
-  - `uv run <cmd>` — run a command inside the project venv (e.g. `uv run python main.py`, or once Streamlit is added, `uv run streamlit run main.py`).
-- There is no test runner, linter, or build configured yet. If you add one, record the invocation here.
+  - `uv run <cmd>` — run a command inside the project venv. Common ones:
+    - `uv run streamlit run streamlit_app.py` — start the Streamlit app.
+    - `uv run python main.py --help` — discover CLI subcommands.
+    - `uv run python main.py positions` — print current positions to terminal.
+    - `uv run python main.py token` — show cached access token expiry (no refresh).
+    - `uv run pytest` — run the test suite (configured via `[tool.pytest.ini_options]` in `pyproject.toml`).
+
+## Modules
+
+- `questlit/questrade.py` — `QuestradeClient` for the Questrade REST API. Handles the OAuth refresh-token rotation (Questrade tokens are single-use) by persisting the rotated token to `~/.questlit/token.json`. First-time setup: generate a personal-app refresh token in the Questrade portal, then `export QUESTRADE_REFRESH_TOKEN=<token>` once. After the first successful call, the env var is no longer needed — the on-disk cache takes over.
+  - Public surface: `get_accounts()`, `get_positions(account_id)`, `get_all_positions()` (latter tags each row with `accountNumber` / `accountType`), `token_info()` (read-only: returns the persisted token dict without triggering a refresh — used by the CLI's `token` subcommand).
+- Both entry points (`streamlit_app.py`, `main.py`) call `dotenv.load_dotenv()`, so the seed token can live in a gitignored `.env` at the repo root (`QUESTRADE_REFRESH_TOKEN=...`).
+- The CLI (`main.py`) uses **Typer** for command parsing and **Loguru** for output — `logger.remove()` + a minimal `<level>{message}</level>` format keep CLI output print-like while preserving level coloring. Prefer `logger.info` / `logger.warning` over `print` / `typer.echo` in CLI code.
+- `questlit/` is an implicit namespace package — no `__init__.py`. Same for `tests/`.
 
 ## Guidelines
 
