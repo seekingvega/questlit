@@ -439,6 +439,74 @@ def test_chunk_date_range_helper():
     assert chunks[2] == (base + timedelta(days=60), base + timedelta(days=65))
 
 
+def test_get_balances_returns_full_payload(tmp_path):
+    """get_balances returns the raw dict with all four sibling lists."""
+    token_path = tmp_path / "token.json"
+    _seed_token_file(token_path)
+    client = QuestradeClient(token_path=token_path)
+
+    balances_payload = {
+        "perCurrencyBalances": [
+            {"currency": "CAD", "cash": 100.0, "totalEquity": 200.0},
+            {"currency": "USD", "cash": 50.0, "totalEquity": 75.0},
+        ],
+        "combinedBalances": [{"currency": "CAD", "cash": 165.0, "totalEquity": 290.0}],
+        "sodPerCurrencyBalances": [{"currency": "CAD", "cash": 100.0}],
+        "sodCombinedBalances": [{"currency": "CAD", "cash": 165.0}],
+    }
+    with patch(
+        "questlit.questrade.requests.get",
+        return_value=_mock_response(200, balances_payload),
+    ) as get:
+        result = client.get_balances("ACC")
+
+    assert result == balances_payload
+    called_url = get.call_args.args[0]
+    assert called_url == "https://api01.iq.questrade.com/v1/accounts/ACC/balances"
+
+
+def test_get_all_balances_tags_account_fields(tmp_path):
+    """Each per-currency balance row carries its account number and type."""
+    token_path = tmp_path / "token.json"
+    _seed_token_file(token_path)
+    client = QuestradeClient(token_path=token_path)
+
+    responses = [
+        _mock_response(200, {"accounts": [{"number": "A1", "type": "TFSA"}]}),
+        _mock_response(
+            200,
+            {
+                "perCurrencyBalances": [
+                    {"currency": "CAD", "cash": 10.0, "totalEquity": 20.0},
+                    {"currency": "USD", "cash": 5.0, "totalEquity": 15.0},
+                ],
+                "combinedBalances": [{"currency": "CAD", "cash": 16.5}],
+                "sodPerCurrencyBalances": [],
+                "sodCombinedBalances": [],
+            },
+        ),
+    ]
+    with patch("questlit.questrade.requests.get", side_effect=responses):
+        rows = client.get_all_balances()
+
+    assert rows == [
+        {
+            "accountNumber": "A1",
+            "accountType": "TFSA",
+            "currency": "CAD",
+            "cash": 10.0,
+            "totalEquity": 20.0,
+        },
+        {
+            "accountNumber": "A1",
+            "accountType": "TFSA",
+            "currency": "USD",
+            "cash": 5.0,
+            "totalEquity": 15.0,
+        },
+    ]
+
+
 def test_get_all_positions_tags_account_fields(tmp_path):
     token_path = tmp_path / "token.json"
     token_path.write_text(

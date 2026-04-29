@@ -41,6 +41,18 @@ def positions() -> None:
     logger.info("\n" + df.to_string(index=False))
 
 
+@app.command()
+def accounts() -> None:
+    """Print the list of Questrade accounts for the authenticated user."""
+    client = QuestradeClient(prompt_callback=_prompt_for_refresh_token)
+    rows = client.get_accounts()
+    if not rows:
+        logger.info("No accounts.")
+        return
+    df = pd.DataFrame(rows)
+    logger.info("\n" + df.to_string(index=False))
+
+
 def _parse_start_date(value: str | None) -> datetime | None:
     """Parse a YYYY-MM-DD string as 00:00:00 local time."""
     if value is None:

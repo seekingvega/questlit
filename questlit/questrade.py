@@ -110,6 +110,23 @@ class QuestradeClient:
         """Return open positions for a single account."""
         return self._get(f"v1/accounts/{account_id}/positions").get("positions", [])
 
+    def get_balances(self, account_id: str | int) -> dict[str, Any]:
+        """Return the raw balances payload for a single account.
+
+        Questrade's balances response has four sibling lists —
+        ``perCurrencyBalances`` and ``combinedBalances`` (live), plus
+        ``sodPerCurrencyBalances`` and ``sodCombinedBalances`` (start of
+        day) — so this method returns the full dict unchanged. Use
+        :meth:`get_all_balances` for a flattened cross-account view.
+
+        Args:
+            account_id: Questrade account number.
+
+        Returns:
+            The full balances payload dict.
+        """
+        return self._get(f"v1/accounts/{account_id}/balances")
+
     def get_orders(
         self,
         account_id: str | int,
@@ -217,6 +234,30 @@ class QuestradeClient:
                         "accountNumber": number,
                         "accountType": account.get("type"),
                         **pos,
+                    }
+                )
+        return rows
+
+    def get_all_balances(self) -> list[dict[str, Any]]:
+        """Return per-currency live balances across every account.
+
+        Each row is a Questrade ``perCurrencyBalances`` entry augmented
+        with ``accountNumber`` and ``accountType`` for grouping/filtering.
+        For combined or start-of-day views, call :meth:`get_balances`
+        directly.
+        """
+        rows: list[dict[str, Any]] = []
+        for account in self.get_accounts():
+            number = account.get("number")
+            if number is None:
+                continue
+            payload = self.get_balances(number)
+            for bal in payload.get("perCurrencyBalances", []):
+                rows.append(
+                    {
+                        "accountNumber": number,
+                        "accountType": account.get("type"),
+                        **bal,
                     }
                 )
         return rows
