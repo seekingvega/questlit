@@ -7,12 +7,9 @@ from datetime import datetime, timezone
 
 import pandas as pd
 import typer
-from dotenv import load_dotenv
 from loguru import logger
 
 from questlit.questrade import QuestradeClient
-
-load_dotenv()
 
 logger.remove()
 logger.add(sys.stderr, format="<level>{message}</level>", level="INFO")
@@ -23,10 +20,20 @@ app = typer.Typer(
 )
 
 
+def _prompt_for_refresh_token() -> str:
+    return typer.prompt(
+        "Paste a fresh Questrade refresh token "
+        "(generate at My Apps → Personal Apps: "
+        "https://apphub.questrade.com/UI/UserApps.aspx)",
+        hide_input=True,
+    )
+
+
 @app.command()
 def positions() -> None:
     """Print current positions across all Questrade accounts."""
-    rows = QuestradeClient().get_all_positions()
+    client = QuestradeClient(prompt_callback=_prompt_for_refresh_token)
+    rows = client.get_all_positions()
     if not rows:
         logger.info("No open positions.")
         return

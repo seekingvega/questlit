@@ -11,6 +11,7 @@ import time
 from unittest.mock import MagicMock, patch
 
 import pytest
+import requests
 
 from questlit.questrade import QuestradeAuthError, QuestradeClient
 
@@ -20,7 +21,9 @@ def _mock_response(status_code: int = 200, json_data: dict | None = None) -> Mag
     resp.status_code = status_code
     resp.json.return_value = json_data or {}
     if status_code >= 400:
-        resp.raise_for_status.side_effect = Exception(f"HTTP {status_code}")
+        err = requests.HTTPError(f"HTTP {status_code}")
+        err.response = resp
+        resp.raise_for_status.side_effect = err
     else:
         resp.raise_for_status.return_value = None
     return resp
@@ -160,24 +163,22 @@ def test_get_retries_once_on_401(tmp_path):
     assert get.call_args.kwargs["headers"]["Authorization"] == "Bearer access-abc"
 
 
-def test_seed_token_used_only_when_file_missing(tmp_path, monkeypatch):
-    monkeypatch.delenv("QUESTRADE_REFRESH_TOKEN", raising=False)
+def test_seed_token_used_only_when_file_missing(tmp_path):
     token_path = tmp_path / "token.json"
 
-    # No file, no env, no seed → should raise
+    # No file, no seed, no callback → should raise
     client = QuestradeClient(token_path=token_path)
     with pytest.raises(QuestradeAuthError):
         client._refresh_access_token()
 
-    # Env-var seed picked up
-    monkeypatch.setenv("QUESTRADE_REFRESH_TOKEN", "from-env")
-    client = QuestradeClient(token_path=token_path)
+    # Constructor seed picked up when cache is empty
+    client = QuestradeClient(token_path=token_path, seed_refresh_token="from-arg")
     with patch(
         "questlit.questrade.requests.post",
         return_value=_mock_response(200, _refresh_payload()),
     ) as post:
         client._refresh_access_token()
-    assert post.call_args.kwargs["params"]["refresh_token"] == "from-env"
+    assert post.call_args.kwargs["params"]["refresh_token"] == "from-arg"
 
     # On the next refresh, the seed is ignored — disk wins.
     with patch(
@@ -186,6 +187,82 @@ def test_seed_token_used_only_when_file_missing(tmp_path, monkeypatch):
     ) as post:
         client._refresh_access_token()
     assert post.call_args.kwargs["params"]["refresh_token"] == "rotated-token"
+
+
+def test_prompt_callback_used_when_no_cached_token(tmp_path):
+    """When the cache is empty and no seed is set, the callback supplies one."""
+    token_path = tmp_path / "token.json"
+    callback = MagicMock(return_value="FRESH_SEED")
+    client = QuestradeClient(token_path=token_path, prompt_callback=callback)
+
+    with patch(
+        "questlit.questrade.requests.post",
+        return_value=_mock_response(200, _refresh_payload("rotated")),
+    ) as post:
+        client._refresh_access_token()
+
+    callback.assert_called_once_with()
+    assert post.call_args.kwargs["params"]["refresh_token"] == "FRESH_SEED"
+    persisted = json.loads(token_path.read_text())
+    assert persisted["refresh_token"] == "rotated"
+
+
+def test_prompt_callback_used_when_cached_refresh_rejected(tmp_path):
+    """A 400 from Questrade on the cached token triggers the prompt fallback."""
+    token_path = tmp_path / "token.json"
+    token_path.write_text(
+        json.dumps(
+            {
+                "access_token": "stale-access",
+                "refresh_token": "stale-refresh",
+                "api_server": "https://api01.iq.questrade.com/",
+                "expires_at": time.time() - 10,  # forces a refresh
+            }
+        )
+    )
+    callback = MagicMock(return_value="FRESH_SEED")
+    client = QuestradeClient(token_path=token_path, prompt_callback=callback)
+
+    post_responses = [
+        _mock_response(400, {"error": "invalid_grant"}),
+        _mock_response(200, _refresh_payload("rotated")),
+    ]
+    with patch(
+        "questlit.questrade.requests.post", side_effect=post_responses
+    ) as post:
+        client._refresh_access_token()
+
+    callback.assert_called_once_with()
+    assert post.call_count == 2
+    # First call used the cached (rejected) token, second used the prompt seed.
+    assert post.call_args_list[0].kwargs["params"]["refresh_token"] == "stale-refresh"
+    assert post.call_args_list[1].kwargs["params"]["refresh_token"] == "FRESH_SEED"
+    persisted = json.loads(token_path.read_text())
+    assert persisted["refresh_token"] == "rotated"
+
+
+def test_raises_when_no_callback_and_no_seed_and_no_cache(tmp_path):
+    """Programmatic use with no recovery path still raises QuestradeAuthError."""
+    client = QuestradeClient(token_path=tmp_path / "token.json")
+    with pytest.raises(QuestradeAuthError):
+        client._refresh_access_token()
+
+
+def test_prompt_token_rejected_does_not_loop(tmp_path):
+    """If the prompted seed is also rejected, raise without re-prompting."""
+    token_path = tmp_path / "token.json"
+    callback = MagicMock(return_value="ALSO_BAD")
+    client = QuestradeClient(token_path=token_path, prompt_callback=callback)
+
+    with patch(
+        "questlit.questrade.requests.post",
+        return_value=_mock_response(400, {"error": "invalid_grant"}),
+    ) as post:
+        with pytest.raises(requests.HTTPError):
+            client._refresh_access_token()
+
+    callback.assert_called_once_with()
+    post.assert_called_once()
 
 
 def test_token_info_returns_none_when_missing(tmp_path):

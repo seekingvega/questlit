@@ -8,10 +8,9 @@ rotated token (plus a cached access token) to disk between calls.
 from __future__ import annotations
 
 import json
-import os
 import time
 from pathlib import Path
-from typing import Any
+from typing import Any, Callable
 from urllib.parse import urljoin
 
 import requests
@@ -28,18 +27,21 @@ class QuestradeAuthError(RuntimeError):
 class QuestradeClient:
     """Client for Questrade's REST API.
 
-    On first use, seed a refresh token from the ``QUESTRADE_REFRESH_TOKEN`` env
-    var (or pass ``seed_refresh_token`` directly). Generate one in the Questrade
-    portal at My Apps → Personal Apps. After the first successful call, the
-    rotated refresh token plus a short-lived access token are written to
-    ``token_path`` (default ``~/.questlit/token.json``) and reused on subsequent
-    runs.
+    On first use, the client needs a refresh token generated in the Questrade
+    portal (My Apps → Personal Apps). Provide it via ``seed_refresh_token`` for
+    programmatic use, or wire ``prompt_callback`` to ask the user interactively
+    when no cached token is available (or the cached one has been rejected).
+    After the first successful call, the rotated refresh token plus a
+    short-lived access token are written to ``token_path`` (default
+    ``~/.questlit/token.json``) and reused on subsequent runs.
 
     Args:
         token_path: Where to read/write the persistent token cache.
-        seed_refresh_token: Initial refresh token. Used only when the token file
-            is missing or has no ``refresh_token``. Falls back to the
-            ``QUESTRADE_REFRESH_TOKEN`` environment variable.
+        seed_refresh_token: Initial refresh token. Used only when the cache has
+            no usable ``refresh_token``.
+        prompt_callback: Called to obtain a fresh refresh token when no cache
+            exists or the cached refresh token is rejected by Questrade. The
+            callable receives no arguments and must return the token string.
 
     Example:
         >>> client = QuestradeClient(token_path=Path("/tmp/nope.json"),
@@ -51,11 +53,11 @@ class QuestradeClient:
         self,
         token_path: Path | None = None,
         seed_refresh_token: str | None = None,
+        prompt_callback: Callable[[], str] | None = None,
     ) -> None:
         self.token_path = Path(token_path) if token_path else DEFAULT_TOKEN_PATH
-        self._seed_refresh_token = seed_refresh_token or os.environ.get(
-            "QUESTRADE_REFRESH_TOKEN"
-        )
+        self._seed_refresh_token = seed_refresh_token
+        self._prompt_callback = prompt_callback
 
     # ----- Public API -----
 
@@ -117,20 +119,12 @@ class QuestradeClient:
 
     # ----- Auth -----
 
-    def _refresh_access_token(self) -> dict[str, Any]:
-        """Exchange the current refresh token for a new access + refresh token.
+    def _exchange_refresh_token(self, refresh_token: str) -> dict[str, Any]:
+        """POST a refresh token to Questrade and persist the rotated pair.
 
         Persists the rotated token to disk before returning. Questrade refresh
         tokens are single-use, so failing to persist would lock the user out.
         """
-        cached = self._load_token()
-        refresh_token = cached.get("refresh_token") or self._seed_refresh_token
-        if not refresh_token:
-            raise QuestradeAuthError(
-                "No refresh token available. Set QUESTRADE_REFRESH_TOKEN or pass "
-                "seed_refresh_token after generating one in the Questrade portal."
-            )
-
         resp = requests.post(
             AUTH_URL,
             params={"grant_type": "refresh_token", "refresh_token": refresh_token},
@@ -148,6 +142,39 @@ class QuestradeClient:
         }
         self._save_token(token)
         return token
+
+    def _refresh_access_token(self) -> dict[str, Any]:
+        """Refresh the cached token, prompting for a new seed if needed.
+
+        Tries the cached refresh token first. If it's missing or rejected by
+        Questrade with a 400 ``invalid_grant`` (cached token expired
+        server-side), falls back to ``seed_refresh_token`` or
+        ``prompt_callback``. Raises ``QuestradeAuthError`` when no recovery
+        path is available.
+        """
+        cached = self._load_token()
+        cached_refresh = cached.get("refresh_token")
+
+        if cached_refresh:
+            try:
+                return self._exchange_refresh_token(cached_refresh)
+            except requests.HTTPError as exc:
+                resp = getattr(exc, "response", None)
+                if resp is None or resp.status_code != 400:
+                    raise
+                # Cached refresh token rejected — fall through to seed/prompt.
+
+        seed = self._seed_refresh_token
+        if not seed and self._prompt_callback is not None:
+            seed = self._prompt_callback()
+        if not seed:
+            raise QuestradeAuthError(
+                "No refresh token available. Generate one in the Questrade "
+                "portal (My Apps → Personal Apps) and pass it via "
+                "prompt_callback or seed_refresh_token."
+            )
+
+        return self._exchange_refresh_token(seed)
 
     def _ensure_valid_token(self) -> dict[str, Any]:
         token = self._load_token()
