@@ -8,12 +8,17 @@ from __future__ import annotations
 
 import json
 import time
+from datetime import datetime, timedelta, timezone
 from unittest.mock import MagicMock, patch
 
 import pytest
 import requests
 
-from questlit.questrade import QuestradeAuthError, QuestradeClient
+from questlit.questrade import (
+    QuestradeAuthError,
+    QuestradeClient,
+    _chunk_date_range,
+)
 
 
 def _mock_response(status_code: int = 200, json_data: dict | None = None) -> MagicMock:
@@ -288,6 +293,150 @@ def test_token_info_returns_disk_state_without_refresh(tmp_path):
 
     assert info == payload
     post.assert_not_called()
+
+
+def _seed_token_file(token_path) -> None:
+    token_path.write_text(
+        json.dumps(
+            {
+                "access_token": "access-abc",
+                "refresh_token": "r",
+                "api_server": "https://api01.iq.questrade.com/",
+                "expires_at": time.time() + 1000,
+            }
+        )
+    )
+
+
+def test_get_orders_omits_query_string_when_no_args(tmp_path):
+    """No filter args → no `params=` payload, default Questrade behaviour."""
+    token_path = tmp_path / "token.json"
+    _seed_token_file(token_path)
+    client = QuestradeClient(token_path=token_path)
+
+    payload = {"orders": [{"id": 1, "state": "Executed"}]}
+    with patch(
+        "questlit.questrade.requests.get",
+        return_value=_mock_response(200, payload),
+    ) as get:
+        result = client.get_orders("ACC")
+
+    assert result == payload["orders"]
+    called_url = get.call_args.args[0]
+    assert called_url == "https://api01.iq.questrade.com/v1/accounts/ACC/orders"
+    assert get.call_args.kwargs["params"] is None
+
+
+def test_get_orders_passes_state_filter_and_times(tmp_path):
+    """All optional args land in the query string in Questrade-native casing."""
+    token_path = tmp_path / "token.json"
+    _seed_token_file(token_path)
+    client = QuestradeClient(token_path=token_path)
+
+    start = datetime(2025, 1, 1, tzinfo=timezone.utc)
+    end = datetime(2025, 1, 15, tzinfo=timezone.utc)
+
+    with patch(
+        "questlit.questrade.requests.get",
+        return_value=_mock_response(200, {"orders": []}),
+    ) as get:
+        client.get_orders("ACC", start_time=start, end_time=end, state_filter="All")
+
+    params = get.call_args.kwargs["params"]
+    assert params == {
+        "startTime": "2025-01-01T00:00:00+00:00",
+        "endTime": "2025-01-15T00:00:00+00:00",
+        "stateFilter": "All",
+    }
+
+
+def test_get_orders_attaches_utc_to_naive_datetimes(tmp_path):
+    """Naive datetimes are treated as UTC when serialized to ISO."""
+    token_path = tmp_path / "token.json"
+    _seed_token_file(token_path)
+    client = QuestradeClient(token_path=token_path)
+
+    naive = datetime(2025, 1, 1)  # no tzinfo
+    with patch(
+        "questlit.questrade.requests.get",
+        return_value=_mock_response(200, {"orders": []}),
+    ) as get:
+        client.get_orders("ACC", start_time=naive)
+
+    assert get.call_args.kwargs["params"]["startTime"] == "2025-01-01T00:00:00+00:00"
+
+
+def test_get_activities_default_range_calls_once(tmp_path):
+    """No args → exactly one HTTP call covering the trailing 30 days."""
+    token_path = tmp_path / "token.json"
+    _seed_token_file(token_path)
+    client = QuestradeClient(token_path=token_path)
+
+    with patch(
+        "questlit.questrade.requests.get",
+        return_value=_mock_response(200, {"activities": [{"type": "Trades"}]}),
+    ) as get:
+        result = client.get_activities("ACC")
+
+    assert result == [{"type": "Trades"}]
+    assert get.call_count == 1
+    params = get.call_args.kwargs["params"]
+    start = datetime.fromisoformat(params["startTime"])
+    end = datetime.fromisoformat(params["endTime"])
+    assert timedelta(days=29, hours=23) <= end - start <= timedelta(days=30, hours=1)
+
+
+def test_get_activities_chunks_long_range_and_concatenates(tmp_path):
+    """A 75-day range fans out into 3 sequential calls and merges results."""
+    token_path = tmp_path / "token.json"
+    _seed_token_file(token_path)
+    client = QuestradeClient(token_path=token_path)
+
+    start = datetime(2025, 1, 1, tzinfo=timezone.utc)
+    end = start + timedelta(days=75)
+
+    responses = [
+        _mock_response(200, {"activities": [{"id": "chunk-1"}]}),
+        _mock_response(200, {"activities": [{"id": "chunk-2-a"}, {"id": "chunk-2-b"}]}),
+        _mock_response(200, {"activities": [{"id": "chunk-3"}]}),
+    ]
+    with patch(
+        "questlit.questrade.requests.get", side_effect=responses
+    ) as get:
+        result = client.get_activities("ACC", start_time=start, end_time=end)
+
+    assert get.call_count == 3
+    assert [row["id"] for row in result] == ["chunk-1", "chunk-2-a", "chunk-2-b", "chunk-3"]
+
+    # Chunks tile the range edge-to-edge with no gaps and no overlap.
+    windows = [call.kwargs["params"] for call in get.call_args_list]
+    assert windows[0]["startTime"] == start.isoformat()
+    assert windows[-1]["endTime"] == end.isoformat()
+    for prev, nxt in zip(windows, windows[1:]):
+        assert prev["endTime"] == nxt["startTime"]
+
+
+def test_chunk_date_range_helper():
+    """Boundary cases: empty/equal range, exact-fit, larger-than-window."""
+    base = datetime(2025, 1, 1, tzinfo=timezone.utc)
+
+    # Empty range yields nothing.
+    assert list(_chunk_date_range(base, base)) == []
+
+    # Range smaller than max_days yields a single chunk.
+    chunks = list(_chunk_date_range(base, base + timedelta(days=10), max_days=30))
+    assert chunks == [(base, base + timedelta(days=10))]
+
+    # Range equal to max_days yields a single chunk.
+    chunks = list(_chunk_date_range(base, base + timedelta(days=30), max_days=30))
+    assert chunks == [(base, base + timedelta(days=30))]
+
+    # Range > max_days yields multiple edge-to-edge chunks.
+    chunks = list(_chunk_date_range(base, base + timedelta(days=65), max_days=30))
+    assert len(chunks) == 3
+    assert chunks[0] == (base, base + timedelta(days=30))
+    assert chunks[1] == (base + timedelta(days=30), base + timedelta(days=60))
+    assert chunks[2] == (base + timedelta(days=60), base + timedelta(days=65))
 
 
 def test_get_all_positions_tags_account_fields(tmp_path):

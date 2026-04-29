@@ -6,7 +6,7 @@ This file provides guidance to Claude Code (claude.ai/code) when working with co
 
 QuestLit is a Streamlit web app for sharing a portfolio and visualizing trades and the equity curve (per `README.md`). Current state:
 - `streamlit_app.py` — minimal Streamlit page rendering current Questrade positions in a table.
-- `main.py` — Typer CLI with `positions` and `token` subcommands, backed by the same `questlit/questrade.py` client.
+- `main.py` — Typer CLI with `positions`, `orders`, `activities`, and `token` subcommands, backed by the same `questlit/questrade.py` client.
 - No equity-curve / trade-visualization code yet — still to be scaffolded.
 
 ## Tooling
@@ -19,13 +19,15 @@ QuestLit is a Streamlit web app for sharing a portfolio and visualizing trades a
     - `uv run streamlit run streamlit_app.py` — start the Streamlit app.
     - `uv run python main.py --help` — discover CLI subcommands.
     - `uv run python main.py positions` — print current positions to terminal.
+    - `uv run python main.py orders <ACCOUNT> [--start YYYY-MM-DD --end YYYY-MM-DD --state All|Open|Closed]` — print orders for one account; `--start` is 00:00:00 local, `--end` is 23:59:59 local.
+    - `uv run python main.py activities <ACCOUNT> [--start YYYY-MM-DD --end YYYY-MM-DD]` — print activities; defaults to last 30 days (start at 00:00:00 local, end at 23:59:59 local). Auto-chunks >30-day windows.
     - `uv run python main.py token` — show cached access token expiry (no refresh).
     - `uv run pytest` — run the test suite (configured via `[tool.pytest.ini_options]` in `pyproject.toml`).
 
 ## Modules
 
 - `questlit/questrade.py` — `QuestradeClient` for the Questrade REST API. Handles the OAuth refresh-token rotation (Questrade tokens are single-use) by persisting the rotated token to `~/.questlit/token.json`. First-time setup: run `uv run python main.py positions` — when no token is cached you'll be prompted to paste a refresh token from the Questrade portal (My Apps → Personal Apps). The same prompt fires automatically if the cached refresh token has expired (~7 days idle, Questrade returns 400 `invalid_grant`).
-  - Public surface: `get_accounts()`, `get_positions(account_id)`, `get_all_positions()` (latter tags each row with `accountNumber` / `accountType`), `token_info()` (read-only: returns the persisted token dict without triggering a refresh — used by the CLI's `token` subcommand).
+  - Public surface: `get_accounts()`, `get_positions(account_id)`, `get_all_positions()` (latter tags each row with `accountNumber` / `accountType`), `get_orders(account_id, start_time=None, end_time=None, state_filter=None)` (unopinionated pass-through; no params → Questrade default of active orders), `get_activities(account_id, start_time=None, end_time=None)` (defaults to last 30 days; auto-chunks longer windows into ≤30-day calls under the hood since Questrade rejects >31-day ranges), `token_info()` (read-only: returns the persisted token dict without triggering a refresh — used by the CLI's `token` subcommand).
   - Constructor accepts `prompt_callback: Callable[[], str] | None` for the interactive seed path and `seed_refresh_token: str | None` for programmatic use. The CLI wires `prompt_callback` to `typer.prompt(..., hide_input=True)`. The Streamlit page catches `QuestradeAuthError` / `HTTPError 400` and renders an inline `st.text_input(type="password")` form, stashing the entered seed in `st.session_state["pending_seed"]` for one rerun before passing it to `QuestradeClient(seed_refresh_token=...)`.
 - The CLI (`main.py`) uses **Typer** for command parsing and **Loguru** for output — `logger.remove()` + a minimal `<level>{message}</level>` format keep CLI output print-like while preserving level coloring. Prefer `logger.info` / `logger.warning` over `print` / `typer.echo` in CLI code.
 - `questlit/` is an implicit namespace package — no `__init__.py`. Same for `tests/`.
