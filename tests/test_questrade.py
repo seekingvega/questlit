@@ -507,6 +507,172 @@ def test_get_all_balances_tags_account_fields(tmp_path):
     ]
 
 
+def test_search_symbols_hits_correct_url(tmp_path):
+    token_path = tmp_path / "token.json"
+    _seed_token_file(token_path)
+    client = QuestradeClient(token_path=token_path)
+
+    payload = {"symbols": [{"symbol": "AAPL", "symbolId": 8049}]}
+    with patch(
+        "questlit.questrade.requests.get",
+        return_value=_mock_response(200, payload),
+    ) as get:
+        result = client.search_symbols("AAPL")
+
+    assert result == payload["symbols"]
+    called_url = get.call_args.args[0]
+    assert called_url == "https://api01.iq.questrade.com/v1/symbols/search"
+    assert get.call_args.kwargs["params"] == {"prefix": "AAPL"}
+
+
+def test_get_candles_resolves_symbol_then_fetches(tmp_path):
+    token_path = tmp_path / "token.json"
+    _seed_token_file(token_path)
+    client = QuestradeClient(token_path=token_path)
+
+    start = datetime(2025, 1, 1, tzinfo=timezone.utc)
+    end = datetime(2025, 1, 5, tzinfo=timezone.utc)
+    responses = [
+        _mock_response(200, {"symbols": [{"symbol": "AAPL", "symbolId": 8049}]}),
+        _mock_response(
+            200,
+            {"candles": [{"start": "2025-01-02", "open": 1.0, "close": 2.0}]},
+        ),
+    ]
+    with patch(
+        "questlit.questrade.requests.get", side_effect=responses
+    ) as get:
+        result = client.get_candles("AAPL", start, end, interval="OneDay")
+
+    assert result == [{"start": "2025-01-02", "open": 1.0, "close": 2.0}]
+    assert get.call_count == 2
+    candles_url = get.call_args_list[1].args[0]
+    assert candles_url == "https://api01.iq.questrade.com/v1/markets/candles/8049"
+    candles_params = get.call_args_list[1].kwargs["params"]
+    assert candles_params == {
+        "startTime": "2025-01-01T00:00:00+00:00",
+        "endTime": "2025-01-05T00:00:00+00:00",
+        "interval": "OneDay",
+    }
+
+
+def test_get_candles_picks_exact_symbol_match(tmp_path):
+    """Prefix search returns near-misses; only the exact match is used."""
+    token_path = tmp_path / "token.json"
+    _seed_token_file(token_path)
+    client = QuestradeClient(token_path=token_path)
+
+    start = datetime(2025, 1, 1, tzinfo=timezone.utc)
+    end = datetime(2025, 1, 2, tzinfo=timezone.utc)
+    responses = [
+        _mock_response(
+            200,
+            {
+                "symbols": [
+                    {"symbol": "AAPL.MX", "symbolId": 1111},
+                    {"symbol": "AAPL", "symbolId": 8049},
+                    {"symbol": "AAPLW", "symbolId": 2222},
+                ]
+            },
+        ),
+        _mock_response(200, {"candles": []}),
+    ]
+    with patch(
+        "questlit.questrade.requests.get", side_effect=responses
+    ) as get:
+        client.get_candles("AAPL", start, end)
+
+    candles_url = get.call_args_list[1].args[0]
+    assert candles_url.endswith("/v1/markets/candles/8049")
+
+
+def test_get_candles_raises_on_no_match(tmp_path):
+    token_path = tmp_path / "token.json"
+    _seed_token_file(token_path)
+    client = QuestradeClient(token_path=token_path)
+
+    start = datetime(2025, 1, 1, tzinfo=timezone.utc)
+    end = datetime(2025, 1, 2, tzinfo=timezone.utc)
+    with patch(
+        "questlit.questrade.requests.get",
+        return_value=_mock_response(
+            200, {"symbols": [{"symbol": "AAPL.MX", "symbolId": 1111}]}
+        ),
+    ):
+        with pytest.raises(ValueError, match="No exact symbol match"):
+            client.get_candles("AAPL", start, end)
+
+
+def test_get_candles_rejects_invalid_interval(tmp_path):
+    """Unknown interval raises before any HTTP call is made."""
+    token_path = tmp_path / "token.json"
+    _seed_token_file(token_path)
+    client = QuestradeClient(token_path=token_path)
+
+    start = datetime(2025, 1, 1, tzinfo=timezone.utc)
+    end = datetime(2025, 1, 2, tzinfo=timezone.utc)
+    with patch("questlit.questrade.requests.get") as get:
+        with pytest.raises(ValueError, match="Unknown interval"):
+            client.get_candles("AAPL", start, end, interval="NotAThing")
+    get.assert_not_called()
+
+
+def test_get_candles_chunks_long_range_for_short_interval(tmp_path):
+    """OneMinute caps at 1 calendar day per chunk; 10 days → 10 calls."""
+    token_path = tmp_path / "token.json"
+    _seed_token_file(token_path)
+    client = QuestradeClient(token_path=token_path)
+
+    start = datetime(2025, 1, 1, tzinfo=timezone.utc)
+    end = start + timedelta(days=10)
+
+    symbols_resp = _mock_response(
+        200, {"symbols": [{"symbol": "AAPL", "symbolId": 8049}]}
+    )
+    candle_chunks = [
+        _mock_response(200, {"candles": [{"id": f"chunk-{i}"}]}) for i in range(10)
+    ]
+    with patch(
+        "questlit.questrade.requests.get",
+        side_effect=[symbols_resp, *candle_chunks],
+    ) as get:
+        result = client.get_candles("AAPL", start, end, interval="OneMinute")
+
+    # 1 symbol-search call + 10 candle chunks
+    assert get.call_count == 11
+    assert [row["id"] for row in result] == [f"chunk-{i}" for i in range(10)]
+
+    candle_calls = get.call_args_list[1:]
+    windows = [call.kwargs["params"] for call in candle_calls]
+    assert windows[0]["startTime"] == start.isoformat()
+    assert windows[-1]["endTime"] == end.isoformat()
+    for prev, nxt in zip(windows, windows[1:]):
+        assert prev["endTime"] == nxt["startTime"]
+        assert prev["interval"] == "OneMinute"
+
+
+def test_get_candles_attaches_utc_to_naive_datetimes(tmp_path):
+    """Naive datetimes serialize as UTC in the candles request params."""
+    token_path = tmp_path / "token.json"
+    _seed_token_file(token_path)
+    client = QuestradeClient(token_path=token_path)
+
+    naive_start = datetime(2025, 1, 1)
+    naive_end = datetime(2025, 1, 2)
+    responses = [
+        _mock_response(200, {"symbols": [{"symbol": "AAPL", "symbolId": 8049}]}),
+        _mock_response(200, {"candles": []}),
+    ]
+    with patch(
+        "questlit.questrade.requests.get", side_effect=responses
+    ) as get:
+        client.get_candles("AAPL", naive_start, naive_end)
+
+    params = get.call_args_list[1].kwargs["params"]
+    assert params["startTime"] == "2025-01-01T00:00:00+00:00"
+    assert params["endTime"] == "2025-01-02T00:00:00+00:00"
+
+
 def test_get_all_positions_tags_account_fields(tmp_path):
     token_path = tmp_path / "token.json"
     token_path.write_text(

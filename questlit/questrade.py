@@ -1,8 +1,10 @@
 """Questrade API client.
 
-Authenticates with a single-use OAuth refresh token and fetches account positions.
-The refresh token rotates on every redemption, so this module persists the
-rotated token (plus a cached access token) to disk between calls.
+Authenticates with a single-use OAuth refresh token and fetches account
+data (positions, orders, activities, balances) plus market data (symbol
+search, OHLCV candles). The refresh token rotates on every redemption,
+so this module persists the rotated token (plus a cached access token)
+to disk between calls.
 """
 
 from __future__ import annotations
@@ -20,6 +22,37 @@ DEFAULT_TOKEN_PATH = Path.home() / ".questlit" / "token.json"
 AUTH_URL = "https://login.questrade.com/oauth2/token"
 REFRESH_LEEWAY_SECONDS = 60
 ACTIVITIES_MAX_WINDOW_DAYS = 30
+
+CANDLE_INTERVALS = frozenset(
+    {
+        "OneMinute", "TwoMinutes", "ThreeMinutes", "FourMinutes", "FiveMinutes",
+        "TenMinutes", "FifteenMinutes", "TwentyMinutes", "HalfHour",
+        "OneHour", "TwoHours", "FourHours",
+        "OneDay", "OneWeek", "OneMonth", "OneYear",
+    }
+)
+
+# Calendar-day chunk sizes per interval. Sized so each request stays well
+# under Questrade's ~2000-candle response cap, accounting for the gap
+# between trading and calendar days.
+_CANDLE_MAX_DAYS_BY_INTERVAL: dict[str, int] = {
+    "OneMinute": 1,
+    "TwoMinutes": 2,
+    "ThreeMinutes": 3,
+    "FourMinutes": 5,
+    "FiveMinutes": 6,
+    "TenMinutes": 13,
+    "FifteenMinutes": 20,
+    "TwentyMinutes": 27,
+    "HalfHour": 41,
+    "OneHour": 83,
+    "TwoHours": 166,
+    "FourHours": 333,
+    "OneDay": 1825,
+    "OneWeek": 12775,
+    "OneMonth": 54750,
+    "OneYear": 730000,
+}
 
 
 def _ensure_aware(dt: datetime) -> datetime:
@@ -260,6 +293,101 @@ class QuestradeClient:
                         **bal,
                     }
                 )
+        return rows
+
+    # ----- Market data -----
+
+    def search_symbols(self, prefix: str) -> list[dict[str, Any]]:
+        """Search Questrade's symbol catalog by ticker prefix.
+
+        Thin passthrough to ``GET /v1/symbols/search``. Useful on its own
+        for autocomplete / ID lookup, and reused internally by
+        :meth:`get_candles` to resolve a ticker to a numeric ``symbolId``.
+
+        Args:
+            prefix: Ticker prefix to search for (e.g. ``"AAPL"``).
+
+        Returns:
+            List of raw symbol dicts. Each entry includes at least
+            ``symbol`` (string ticker) and ``symbolId`` (numeric).
+        """
+        return self._get("v1/symbols/search", params={"prefix": prefix}).get(
+            "symbols", []
+        )
+
+    def _resolve_symbol_id(self, symbol: str) -> int:
+        """Return the numeric ``symbolId`` for an exact ticker match.
+
+        Questrade's prefix search returns near-misses (``AAPL.MX``,
+        ``MSFT.US``…), so this helper filters to the row whose ``symbol``
+        field equals the input exactly. Raises ``ValueError`` if nothing
+        matches.
+        """
+        for row in self.search_symbols(symbol):
+            if row.get("symbol") == symbol:
+                return int(row["symbolId"])
+        raise ValueError(f"No exact symbol match for {symbol!r}")
+
+    def get_candles(
+        self,
+        symbol: str,
+        start_time: datetime,
+        end_time: datetime,
+        interval: str = "OneDay",
+    ) -> list[dict[str, Any]]:
+        """Return OHLCV candles for ``symbol`` over ``[start_time, end_time)``.
+
+        Resolves the ticker to a Questrade ``symbolId`` (one extra HTTP
+        call) and fetches candles from
+        ``GET /v1/markets/candles/{symbolId}``. Long ranges are auto-chunked
+        per ``interval`` so each request stays under Questrade's
+        ~2000-candle response cap; results are concatenated in order.
+
+        Args:
+            symbol: Exact ticker string (e.g. ``"AAPL"``). Must match the
+                ``symbol`` field returned by Questrade's symbol search.
+            start_time: Window start (inclusive). Naive datetimes are
+                treated as UTC.
+            end_time: Window end (exclusive). Naive datetimes are treated
+                as UTC.
+            interval: One of :data:`CANDLE_INTERVALS` (Questrade's
+                ``HistoricalDataGranularity`` values, e.g. ``"OneMinute"``,
+                ``"OneHour"``, ``"OneDay"``). Defaults to ``"OneDay"``.
+
+        Returns:
+            List of raw candle dicts. Each entry typically includes
+            ``start``, ``end``, ``open``, ``high``, ``low``, ``close``,
+            and ``volume``.
+
+        Raises:
+            ValueError: If ``interval`` is not a recognized granularity,
+                or no exact symbol match is found.
+        """
+        if interval not in CANDLE_INTERVALS:
+            raise ValueError(
+                f"Unknown interval {interval!r}. Must be one of: "
+                f"{sorted(CANDLE_INTERVALS)}"
+            )
+
+        symbol_id = self._resolve_symbol_id(symbol)
+        start_time = _ensure_aware(start_time)
+        end_time = _ensure_aware(end_time)
+
+        path = f"v1/markets/candles/{symbol_id}"
+        max_days = _CANDLE_MAX_DAYS_BY_INTERVAL[interval]
+        rows: list[dict[str, Any]] = []
+        for chunk_start, chunk_end in _chunk_date_range(
+            start_time, end_time, max_days=max_days
+        ):
+            payload = self._get(
+                path,
+                params={
+                    "startTime": chunk_start.isoformat(),
+                    "endTime": chunk_end.isoformat(),
+                    "interval": interval,
+                },
+            )
+            rows.extend(payload.get("candles", []))
         return rows
 
     # ----- Token persistence -----
