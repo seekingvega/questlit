@@ -64,3 +64,14 @@ def load_candles(
     return QuestradeClient().get_candles(
         symbol, start_time=start_time, end_time=end_time, interval=interval
     )
+
+
+@st.cache_data(ttl="1d")
+def load_symbol_info(symbol: str) -> dict | None:
+    """Return the Questrade symbol-search row matching ``symbol`` exactly.
+
+    Returns ``None`` when no exact match is found. Cached for a day since
+    symbol metadata (description, exchange, etc.) rarely changes.
+    """
+    rows = QuestradeClient().search_symbols(symbol)
+    return next((r for r in rows if r.get("symbol") == symbol), None)
