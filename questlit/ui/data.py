@@ -52,3 +52,15 @@ def load_activities(
     return QuestradeClient().get_activities(
         account_id, start_time=start_time, end_time=end_time
     )
+
+
+@st.cache_data(ttl=60)
+def load_candles(
+    symbol: str,
+    start_time: datetime,
+    end_time: datetime,
+    interval: str = "OneDay",
+) -> list[dict]:
+    return QuestradeClient().get_candles(
+        symbol, start_time=start_time, end_time=end_time, interval=interval
+    )
