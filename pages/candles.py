@@ -9,7 +9,12 @@ import plotly.graph_objects as go
 import streamlit as st
 from plotly.subplots import make_subplots
 
-from questlit.ui.data import load_candles, load_symbol_info
+from questlit.ui.data import (
+    load_activities,
+    load_candles,
+    load_orders,
+    load_symbol_info,
+)
 
 _INTERVALS = ["OneMinute", "FiveMinutes", "OneHour", "OneDay", "OneWeek"]
 _RANGE_PATTERN = re.compile(r"^\s*(\d+)\s*([dwmy])\s*$", re.IGNORECASE)
@@ -45,11 +50,74 @@ def _parse_range(s: str, end: pd.Timestamp) -> pd.Timestamp | None:
     return end - pd.DateOffset(years=n)
 
 
+def _get_activiies(target_acc, symbol, start_time, end_time):
+    activities = load_activities(target_acc, start_time=start_time, end_time=end_time)
+    activities = (
+        [
+            a
+            for a in activities
+            if a["symbol"] == symbol.upper() and a["type"] in ["Trades", "Dividends"]
+        ]
+        if activities
+        else []
+    )
+    return activities
+
+
+def _get_orders(target_acc, symbol, start_time, end_time):
+    orders = load_orders(
+        target_acc, start_time=start_time, end_time=end_time, state_filter="Open"
+    )
+    orders = (
+        [
+            o
+            for o in orders
+            if o["symbol"] == symbol.upper()
+            and o["state"] in ["Accepted", "ContingentOrder"]
+        ]
+        if orders
+        else []
+    )
+    return orders
+
+
+def plot_orders(fig, orders):
+    """visualize orders on top of fig"""
+    if orders:
+        # show limit orders
+        # show stop-limit orders as dotted line
+        pass
+    return fig
+
+
+def plot_activities(fig, activities):
+    """visualize activities on top of fig"""
+    if activities:
+        # show buys with buy arrow
+        # shows sells with orange arrow
+        pass
+    return fig
+
+
 def main() -> None:
+    st.set_page_config(layout="wide", initial_sidebar_state="collapsed")
+
+    # account selection
+    accounts = st.session_state["accounts"]
+    acc_dict = {f"{a['number']} ({a['type']})": a["number"] for a in accounts}
+    with st.sidebar:
+        select_acc = st.selectbox(
+            "Account",
+            help="select an account to view past trades for your Symbol",
+            options=[""] + list(acc_dict.keys()),
+        )
+        target_acc = acc_dict[select_acc] if select_acc else None
+
+    # candles data input
     cols = st.columns([2, 2, 1, 2, 2])
     symbol = cols[0].text_input("Symbol", value="AAPL").strip().upper()
     interval = cols[1].selectbox("Interval", _INTERVALS, index=3)
-    range_str = cols[2].text_input("Range", value="3m")
+    range_str = cols[2].text_input("Range", value="6m")
     end = cols[3].date_input("End", value=pd.Timestamp.now().date())
 
     end_ts = pd.Timestamp(end)
@@ -67,6 +135,28 @@ def main() -> None:
     if not symbol:
         st.info("Enter a ticker symbol to load candles.")
         return
+    else:
+        # let's load orders with start_ts and end_ts
+        orders = (
+            _get_orders(target_acc, symbol, start_time=start_ts, end_time=end_ts)
+            if target_acc
+            else []
+        )
+        activities = (
+            _get_activiies(target_acc, symbol, start_time=start_ts, end_time=end_ts)
+            if target_acc
+            else []
+        )
+
+        if target_acc:
+            st.sidebar.info(
+                f"{len(orders)} orders and {len(activities)} activities found for account `{target_acc}` within the date range for `{symbol}`"
+            )
+            tab_ord, tab_act = st.sidebar.tabs(["orders", "activities"])
+            if orders:
+                tab_ord.dataframe(pd.DataFrame(orders))
+            if activities:
+                tab_act.dataframe(pd.DataFrame(activities))
 
     try:
         candles = load_candles(

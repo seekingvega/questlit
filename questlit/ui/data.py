@@ -38,10 +38,13 @@ def load_balances() -> list[dict]:
 
 @st.cache_data(ttl=60)
 def load_orders(
-    account_id: str | int, start_time: datetime | None = None
+    account_id: str | int,
+    start_time: datetime | None = None,
+    end_time: datetime | None = None,
+    state_filter: str | None = "All",
 ) -> list[dict]:
     return QuestradeClient().get_orders(
-        account_id, start_time=start_time, state_filter="All"
+        account_id, start_time=start_time, end_time=end_time, state_filter=state_filter
     )
 
 
