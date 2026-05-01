@@ -81,21 +81,140 @@ def _get_orders(target_acc, symbol, start_time, end_time):
     return orders
 
 
+_ORDER_SIDE_COLOR = {"Buy": "green", "Sell": "red"}
+
+
 def plot_orders(fig, orders):
-    """visualize orders on top of fig"""
-    if orders:
-        # show limit orders
-        # show stop-limit orders as dotted line
-        pass
+    """Overlay open orders as horizontal price lines on the candle subplot.
+
+    Limit orders render as a solid line at ``limitPrice``; Stop and StopLimit
+    render as a dashed line at ``stopPrice`` (the trigger). Color is green for
+    Buy, red for Sell. Orders without a chartable price (Market, trailing
+    stops) are skipped.
+
+    Args:
+        fig: A ``plotly.graph_objects.Figure`` whose row=1 is the candlestick.
+        orders: List of Questrade order dicts (already filtered by symbol).
+
+    Returns:
+        The figure, mutated in place and returned for chaining.
+    """
+    if not orders:
+        return fig
+    for o in orders:
+        order_type = o.get("orderType", "")
+        if order_type == "Limit":
+            price, dash = o.get("limitPrice"), "solid"
+        elif order_type in ("Stop", "StopLimit"):
+            price, dash = o.get("stopPrice"), "dash"
+        else:
+            continue
+        if price is None:
+            continue
+
+        side = o.get("side", "")
+        color = _ORDER_SIDE_COLOR.get(side, "gray")
+        qty = o.get("totalQuantity", "?")
+        label = f"{side.upper()} {qty} ({order_type}) @ ${price:.2f}"
+        if order_type == "StopLimit" and o.get("limitPrice") is not None:
+            label += f" (limit price: ${o['limitPrice']:.2f})"
+
+        fig.add_hline(
+            y=price,
+            line=dict(color=color, dash=dash, width=1),
+            opacity=0.6,
+            annotation_text=label,
+            annotation_position="top right",
+            annotation_font=dict(color=color, size=10),
+            annotation_opacity=0.6,
+            row=1,
+            col=1,
+        )
     return fig
 
 
-def plot_activities(fig, activities):
-    """visualize activities on top of fig"""
-    if activities:
-        # show buys with buy arrow
-        # shows sells with orange arrow
-        pass
+def plot_activities(fig, activities, df):
+    """Overlay trade fills and dividends as markers on the candle subplot.
+
+    Buys render as green up-triangles, sells as orange down-triangles, anchored
+    at ``(tradeDate, price)``. Dividends render as purple diamonds at the
+    candle low for the trade date (or the chart's min low if no candle aligns)
+    since dividends have no execution price. Each category is grouped into a
+    single trace so the legend stays compact.
+
+    Args:
+        fig: A ``plotly.graph_objects.Figure`` whose row=1 is the candlestick.
+        activities: List of Questrade activity dicts (already filtered by
+            symbol and ``type in {"Trades", "Dividends"}``).
+        df: The candles dataframe, used to anchor dividend markers to a
+            sensible y-coordinate (the candle low for that date).
+
+    Returns:
+        The figure, mutated in place and returned for chaining.
+    """
+    if not activities:
+        return fig
+
+    chart_low = float(df["low"].min())
+    low_by_date: dict = {}
+    for ts, low in zip(df["start"], df["low"]):
+        if pd.notna(ts):
+            low_by_date.setdefault(pd.Timestamp(ts).date(), float(low))
+
+    def _div_y(date: pd.Timestamp) -> float:
+        if pd.isna(date):
+            return chart_low
+        return low_by_date.get(pd.Timestamp(date).date(), chart_low)
+
+    buckets: dict[str, dict[str, list]] = {
+        "Buy": {"x": [], "y": [], "text": []},
+        "Sell": {"x": [], "y": [], "text": []},
+        "Dividend": {"x": [], "y": [], "text": []},
+    }
+    for a in activities:
+        date = pd.to_datetime(a.get("tradeDate"))
+        date_str = date.strftime("%Y-%m-%d") if pd.notna(date) else "?"
+        symbol = a.get("symbol", "")
+        qty = a.get("quantity", 0)
+        price = a.get("price") or 0.0
+        net = a.get("netAmount", 0.0)
+        if a.get("type") == "Dividends":
+            buckets["Dividend"]["x"].append(date)
+            buckets["Dividend"]["y"].append(_div_y(date))
+            buckets["Dividend"]["text"].append(
+                f"{date_str} DIVIDEND {symbol} net ${net:,.2f}"
+            )
+            continue
+        action = a.get("action", "")
+        if action not in ("Buy", "Sell"):
+            continue
+        buckets[action]["x"].append(date)
+        buckets[action]["y"].append(price)
+        buckets[action]["text"].append(
+            f"{date_str} {action.upper()} {qty} {symbol} @ ${price:.2f} (net ${net:,.2f})"
+        )
+
+    styles = {
+        "Buy": dict(symbol="triangle-up", color="blue", size=8, opacity=0.9),
+        "Sell": dict(symbol="triangle-down", color="orange", size=8, opacity=0.9),
+        "Dividend": dict(symbol="diamond", color="purple", size=8, opacity=0.9),
+    }
+    for name, data in buckets.items():
+        if not data["x"]:
+            continue
+        fig.add_trace(
+            go.Scatter(
+                x=data["x"],
+                y=data["y"],
+                mode="markers",
+                marker=styles[name],
+                name=name,
+                hovertext=data["text"],
+                hoverinfo="text",
+            ),
+            row=1,
+            col=1,
+        )
     return fig
 
 
@@ -205,6 +324,8 @@ def main() -> None:
         row=2,
         col=1,
     )
+    plot_orders(fig, orders)
+    plot_activities(fig, activities, df)
     fig.update_layout(
         title=title,
         height=700,
