@@ -110,6 +110,47 @@ def _get_orders(target_acc, symbol, start_time, end_time):
     return open_orders + closed_orders
 
 
+def _executed_order_to_activity(order: dict) -> dict:
+    """Reshape an executed Questrade order into an activity-shaped dict.
+
+    Lets executed orders ride through ``plot_activities`` as Buy/Sell markers
+    without modifying that function. Buys are signed negative on
+    ``netAmount`` (cash out) and Sells positive (cash in), matching how the
+    Questrade activities feed signs trade ``netAmount`` values.
+
+    Args:
+        order: A Questrade order dict (must have ``state == "Executed"``).
+
+    Returns:
+        An activity-shaped dict consumed by ``plot_activities``.
+
+    Examples:
+        >>> o = {"side": "Buy", "symbol": "AAPL", "state": "Executed",
+        ...      "filledQuantity": 10, "avgExecPrice": 150.0,
+        ...      "updateTime": "2026-05-01T15:30:00-04:00"}
+        >>> a = _executed_order_to_activity(o)
+        >>> a["type"], a["action"], a["symbol"], a["quantity"], a["price"]
+        ('Trades', 'Buy', 'AAPL', 10, 150.0)
+        >>> a["netAmount"]
+        -1500.0
+        >>> _executed_order_to_activity({"side": "Sell", "filledQuantity": 5,
+        ...     "avgExecPrice": 20.0})["netAmount"]
+        100.0
+    """
+    qty = order.get("filledQuantity") or order.get("totalQuantity") or 0
+    price = order.get("avgExecPrice") or order.get("limitPrice") or 0.0
+    sign = -1 if order.get("side") == "Buy" else 1
+    return {
+        "type": "Trades",
+        "action": order.get("side", ""),
+        "tradeDate": order.get("updateTime"),
+        "symbol": order.get("symbol", ""),
+        "quantity": qty,
+        "price": price,
+        "netAmount": sign * qty * price,
+    }
+
+
 _ORDER_SIDE_COLOR = {"Buy": "green", "Sell": "red"}
 
 
@@ -353,8 +394,14 @@ def main() -> None:
         row=2,
         col=1,
     )
-    plot_orders(fig, orders)
-    plot_activities(fig, activities, df)
+    open_orders = [o for o in orders if o.get("state") != "Executed"]
+    executed_orders = [o for o in orders if o.get("state") == "Executed"]
+    plot_orders(fig, open_orders)
+    plot_activities(
+        fig,
+        [_executed_order_to_activity(o) for o in executed_orders] + activities,
+        df,
+    )
     fig.update_layout(
         title=title,
         height=700,
