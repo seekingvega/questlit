@@ -10,6 +10,7 @@ import plotly.graph_objects as go
 import streamlit as st
 from plotly.subplots import make_subplots
 
+from questlit.ui.charting import add_volume_profile
 from questlit.ui.data import (
     load_activities,
     load_candles,
@@ -151,7 +152,8 @@ def _executed_order_to_activity(order: dict) -> dict:
     }
 
 
-_ORDER_SIDE_COLOR = {"Buy": "green", "Sell": "red"}
+_ORDER_SIDE_COLOR = {"Buy": "DodgerBlue", "Sell": "DeepPink"}
+# css color names: https://www.w3schools.com/cssref/css_colors.php
 
 
 def plot_orders(fig, orders):
@@ -173,10 +175,12 @@ def plot_orders(fig, orders):
         return fig
     for o in orders:
         order_type = o.get("orderType", "")
-        if order_type == "Limit":
-            price, dash = o.get("limitPrice"), "solid"
+        if (
+            order_type == "Limit"
+        ):  # dash options include 'dash', 'dot', 'dashdot' and 'solid'
+            price, dash = o.get("limitPrice"), "dash"
         elif order_type in ("Stop", "StopLimit"):
-            price, dash = o.get("stopPrice"), "dash"
+            price, dash = o.get("stopPrice"), "dot"
         else:
             continue
         if price is None:
@@ -264,10 +268,11 @@ def plot_activities(fig, activities, df):
             f"{date_str} {action.upper()} {qty} {symbol} @ ${price:.2f} (net ${net:,.2f})"
         )
 
+    # css color names: https://www.w3schools.com/cssref/css_colors.php
     styles = {
-        "Buy": dict(symbol="triangle-up", color="blue", size=8, opacity=0.9),
-        "Sell": dict(symbol="triangle-down", color="orange", size=8, opacity=0.9),
-        "Dividend": dict(symbol="diamond", color="purple", size=8, opacity=0.9),
+        "Buy": dict(symbol="triangle-up", color="DodgerBlue", size=10, opacity=0.6),
+        "Sell": dict(symbol="triangle-down", color="DeepPink", size=10, opacity=0.6),
+        "Dividend": dict(symbol="diamond", color="Gold", size=8, opacity=0.6),
     }
     for name, data in buckets.items():
         if not data["x"]:
@@ -301,6 +306,7 @@ def main() -> None:
             options=[""] + list(acc_dict.keys()),
         )
         target_acc = acc_dict[select_acc] if select_acc else None
+        charting_cofig_container = st.expander(f"Charting", icon=":material/settings:")
 
     # candles data input
     cols = st.columns([2, 2, 1, 2, 2])
@@ -320,6 +326,22 @@ def main() -> None:
         return
 
     cols[4].date_input("Start", value=start_ts.date(), disabled=True)
+
+    # charting configs
+    with charting_cofig_container:
+        do_volume_profile = st.toggle("Volume Profile", value=False)
+        if do_volume_profile:
+            vol_interval = st.selectbox(
+                "Volume Profile Interval",
+                options=[
+                    "OneDay",
+                    "FourHours",
+                    "TwoHours",
+                    "OneHour",
+                    "HalfHour",
+                ],
+                index=3,
+            )
 
     if not symbol:
         st.info("Enter a ticker symbol to load candles.")
@@ -390,7 +412,13 @@ def main() -> None:
         col=1,
     )
     fig.add_trace(
-        go.Bar(x=df["start"], y=df["volume"], name="Volume", showlegend=False),
+        go.Bar(
+            x=df["start"],
+            y=df["volume"],
+            name="Volume",
+            showlegend=False,
+            marker_color="MediumPurple",  # "#636efa",
+        ),
         row=2,
         col=1,
     )
@@ -402,13 +430,31 @@ def main() -> None:
         [_executed_order_to_activity(o) for o in executed_orders] + activities,
         df,
     )
+    if do_volume_profile:
+        v_candles = load_candles(
+            symbol,
+            start_time=start_ts,
+            end_time=end_ts + pd.Timedelta(days=1),
+            interval=vol_interval,
+        )
+        if not v_candles:
+            st.info(f"No candles returned for {symbol} in {vol_interval}.")
+        else:
+            _df = pd.DataFrame(v_candles)
+            _df["start"] = pd.to_datetime(_df["start"])
+            fig = add_volume_profile(fig, _df)
+            start_date = _df["start"].min().date()
+            months = (_df["start"].max() - _df["start"].min()).days / 30.44
+            charting_cofig_container.info(
+                f"{months:.0f} months of volume data (available since {start_date})"
+            )
     fig.update_layout(
         title=title,
         height=700,
         margin=dict(l=10, r=10, t=50, b=10),
         xaxis_rangeslider_visible=False,
     )
-    st.plotly_chart(fig, use_container_width=True)
+    st.plotly_chart(fig, width="stretch")
 
 
 main()

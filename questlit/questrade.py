@@ -17,6 +17,8 @@ from typing import Any, Callable, Iterator
 from urllib.parse import urljoin
 
 import requests
+from loguru import logger
+from tqdm import tqdm
 
 DEFAULT_TOKEN_PATH = Path.home() / ".questlit" / "token.json"
 AUTH_URL = "https://login.questrade.com/oauth2/token"
@@ -25,10 +27,22 @@ ACTIVITIES_MAX_WINDOW_DAYS = 30
 
 CANDLE_INTERVALS = frozenset(
     {
-        "OneMinute", "TwoMinutes", "ThreeMinutes", "FourMinutes", "FiveMinutes",
-        "TenMinutes", "FifteenMinutes", "TwentyMinutes", "HalfHour",
-        "OneHour", "TwoHours", "FourHours",
-        "OneDay", "OneWeek", "OneMonth", "OneYear",
+        "OneMinute",
+        "TwoMinutes",
+        "ThreeMinutes",
+        "FourMinutes",
+        "FiveMinutes",
+        "TenMinutes",
+        "FifteenMinutes",
+        "TwentyMinutes",
+        "HalfHour",
+        "OneHour",
+        "TwoHours",
+        "FourHours",
+        "OneDay",
+        "OneWeek",
+        "OneMonth",
+        "OneYear",
     }
 )
 
@@ -376,9 +390,14 @@ class QuestradeClient:
         path = f"v1/markets/candles/{symbol_id}"
         max_days = _CANDLE_MAX_DAYS_BY_INTERVAL[interval]
         rows: list[dict[str, Any]] = []
-        for chunk_start, chunk_end in _chunk_date_range(
-            start_time, end_time, max_days=max_days
-        ):
+        date_range_chunks = list(
+            _chunk_date_range(start_time, end_time, max_days=max_days)
+        )
+        progress = tqdm(date_range_chunks, disable=True)  # for debugging chunking
+        for chunk_start, chunk_end in progress:
+            progress.set_description(
+                f"{chunk_start.date()} → {chunk_end.date()}", refresh=False
+            )
             payload = self._get(
                 path,
                 params={
@@ -387,6 +406,7 @@ class QuestradeClient:
                     "interval": interval,
                 },
             )
+            # logger.debug(f"{len(payload['candles'])} candles found") # for debugging chunking
             rows.extend(payload.get("candles", []))
         return rows
 
