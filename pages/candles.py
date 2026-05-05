@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import re
+from datetime import datetime, timedelta
 
 import pandas as pd
 import plotly.graph_objects as go
@@ -65,20 +66,48 @@ def _get_activiies(target_acc, symbol, start_time, end_time):
 
 
 def _get_orders(target_acc, symbol, start_time, end_time):
-    orders = load_orders(
-        target_acc, start_time=start_time, end_time=end_time, state_filter="Open"
+    sym = symbol.upper()
+    all_orders = (
+        load_orders(
+            target_acc,
+            start_time=start_time,
+            end_time=end_time,
+            state_filter="All",  # "Open"
+        )
+        or []
     )
-    orders = (
-        [
-            o
-            for o in orders
-            if o["symbol"] == symbol.upper()
-            and o["state"] in ["Accepted", "ContingentOrder"]
-        ]
-        if orders
-        else []
-    )
-    return orders
+    open_orders = [
+        o
+        for o in all_orders
+        if o["symbol"] == sym and o["state"] in ("Accepted", "ContingentOrder")
+    ]
+    closed_orders = [  # today's closed orders show up here instead of in activities
+        o
+        for o in all_orders
+        if o["symbol"] == sym
+        and o["state"] in ("Executed")
+        and pd.to_datetime(o["updateTime"]).date()
+        == datetime.now().date()  # pd.Timestamp(end_time).date()
+    ]
+
+    # Closed orders executed on end_time's date
+    # end_date = pd.Timestamp(end_time).date()
+    # day_start = pd.Timestamp(end_date - timedelta(days=1))
+    # closed_orders = (
+    #     load_orders(
+    #         target_acc, start_time=start_time, end_time=end_time, state_filter="Closed"
+    #     )
+    #     or []
+    # )
+    # closed_orders = [
+    #     o
+    #     for o in closed_orders
+    #     # if o["symbol"] == sym
+    #     # and o["state"] == "Executed"
+    #     # and pd.to_datetime(o["updateTime"]).date() == end_date
+    # ]
+    # print(f"{len(closed_orders)} closedn orders found.")
+    return open_orders + closed_orders
 
 
 _ORDER_SIDE_COLOR = {"Buy": "green", "Sell": "red"}
@@ -239,7 +268,7 @@ def main() -> None:
     range_str = cols[2].text_input("Range", value="6m")
     end = cols[3].date_input("End", value=pd.Timestamp.now().date())
 
-    end_ts = pd.Timestamp(end)
+    end_ts = pd.Timestamp(end, hour=23, minute=59, second=59)
     start_ts = _parse_range(range_str, end_ts)
     if start_ts is None:
         cols[4].date_input("Start", value=end, disabled=True)
