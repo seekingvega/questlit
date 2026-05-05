@@ -49,6 +49,8 @@ CANDLE_INTERVALS = frozenset(
 # Calendar-day chunk sizes per interval. Sized so each request stays well
 # under Questrade's ~2000-candle response cap, accounting for the gap
 # between trading and calendar days.
+# Note that interval smaller than OneDay seems to have only 3 months of historical data
+#  and intervals smaller than TowHours actually don't work
 _CANDLE_MAX_DAYS_BY_INTERVAL: dict[str, int] = {
     "OneMinute": 1,
     "TwoMinutes": 2,
@@ -394,6 +396,7 @@ class QuestradeClient:
             _chunk_date_range(start_time, end_time, max_days=max_days)
         )
         progress = tqdm(date_range_chunks, disable=True)  # for debugging chunking
+        # logger.debug(f"date range chunks:\n{date_range_chunks}")
         for chunk_start, chunk_end in progress:
             progress.set_description(
                 f"{chunk_start.date()} → {chunk_end.date()}", refresh=False
@@ -406,7 +409,9 @@ class QuestradeClient:
                     "interval": interval,
                 },
             )
-            # logger.debug(f"{len(payload['candles'])} candles found") # for debugging chunking
+            # logger.debug(
+            #     f"{len(payload['candles'])} candles found"
+            # )  # for debugging chunking
             rows.extend(payload.get("candles", []))
         return rows
 

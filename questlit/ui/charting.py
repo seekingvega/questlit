@@ -64,3 +64,209 @@ def add_volume_profile(fig, df: pd.DataFrame):
     )
 
     return fig
+
+
+def get_moving_average_col(df_columns):
+    return [
+        c for c in df_columns if "_" in c and c.split("_")[0] in ["ema", "sma", "vwap"]
+    ]
+
+
+_EMA_COLORS = ["Violet", "YellowGreen", "Teal", "HotPink", "LimeGreen"]
+
+
+def plot_emas(fig, df, periods):
+    """Overlay pre-computed EMA lines on the candle subplot, one trace per period.
+
+    Pure plotting helper: expects each ``ema_{period}`` column to already
+    exist on ``df`` (use ``add_moving_average`` from
+    ``questlit.ui.ta_utils``). This decoupling lets callers compute EMAs on
+    a wider warm-up window and then slice ``df`` down to the visible range
+    before plotting, which keeps early EMA values stable.
+
+    Args:
+        fig: A ``plotly.graph_objects.Figure`` whose row=1 is the candlestick.
+        df: Candles dataframe with a ``start`` timestamp column and an
+            ``ema_{period}`` column for each requested period.
+        periods: Iterable of positive int EMA periods to plot. Colors cycle
+            through ``_EMA_COLORS`` in order.
+
+    Returns:
+        The figure, mutated in place and returned for chaining.
+    """
+    for i, period in enumerate(periods):
+        col = f"ema_{period}"
+        fig.add_trace(
+            go.Scatter(
+                x=df["start"],
+                y=df[col],
+                mode="lines",
+                name=f"EMA {period}",
+                line=dict(color=_EMA_COLORS[i % len(_EMA_COLORS)], width=1),
+                opacity=0.8,
+            ),
+            row=1,
+            col=1,
+        )
+    return fig
+
+
+def add_impulse_trace(
+    fig,
+    df,
+    date_col=None,
+    ohlc_col_map={"o": "Open", "h": "High", "l": "Low", "c": "Close"},
+    l_rgb_css_color_name=["red", "green", "DodgerBlue"],
+):
+    """add candlestick trace on top to show impulse system
+    ref: https://stackoverflow.com/a/66998861/14285096
+    """
+    df_green = df[df["impulse"] == 1]
+    df_red = df[df["impulse"] == -1]
+    df_blue = df[df["impulse"] == 0]
+
+    l_trace_def = [
+        {"name": "long or short", "df": df_blue, "color": l_rgb_css_color_name[2]},
+        {"name": "long only", "df": df_green, "color": l_rgb_css_color_name[1]},
+        {"name": "short only", "df": df_red, "color": l_rgb_css_color_name[0]},
+    ]
+    for trace in l_trace_def:
+        df = trace["df"]
+        fig.add_trace(
+            go.Candlestick(
+                x=df[date_col] if date_col else df.index,
+                open=df[ohlc_col_map["o"]],
+                high=df[ohlc_col_map["h"]],
+                low=df[ohlc_col_map["l"]],
+                close=df[ohlc_col_map["c"]],
+                name=trace["name"],
+                increasing_line_color=trace["color"],
+                decreasing_line_color=trace["color"],
+            ),
+            row=1,
+            col=1,
+        )
+    return fig
+
+
+def add_ADX_trace(
+    fig,
+    df,
+    ref_row,
+    ref_col=1,
+    date_col=None,
+    line_color_map={"ADX": "Yellow", "+DMI": "DarkOliveGreen", "-DMI": "DarkRed"},
+):
+    date_serie = df[date_col] if date_col else df.index
+    for k, v in line_color_map.items():
+        fig.append_trace(
+            go.Scatter(x=date_serie, y=df[k], name=k, line={"color": v}),
+            row=ref_row,
+            col=ref_col,
+        )
+    return fig
+
+
+def add_MACD_trace(fig, df, ref_row, ref_col=1, date_col=None, draw_signal_line=True):
+    for c in ["MACD", "MACD_histogram", "MACD_signal"]:
+        assert c in df.columns, f"required column {c} is missing from input df"
+
+    date_serie = df[date_col] if date_col else df.index
+
+    if draw_signal_line:
+        fig.add_trace(
+            go.Scatter(
+                x=df.index,
+                y=df["MACD_signal"],
+                name="MACD_signal",
+                line={"color": "DarkGrey"},
+            ),
+            row=ref_row,
+            col=ref_col,
+        )
+        fig.add_trace(
+            go.Scatter(x=df.index, y=df["MACD"], name="MACD", line={"color": "Gold"}),
+            row=ref_row,
+            col=ref_col,
+        )
+        fig.add_trace(
+            go.Scatter(
+                x=df.index,
+                y=[0 for i in df.index],
+                name="MACD_0",
+                line={"color": "Grey"},
+            ),
+            row=ref_row,
+            col=ref_col,
+        )
+
+        # can't put histogram on because requires secondary_y in spec during make_subplots()
+        # fig.add_trace(go.Bar(x = date_serie, y = df['MACD_histogram'], name = 'MACD_histogram'),
+        #     row = ref_row, col = 1, secondary_y = True)
+
+        # applying ranges to yaxis makes the signal line plot look sad
+        # fig.update_yaxes(range=[df['MACD_histogram'].min(), df['MACD_histogram'].max()],
+        #     row= ref_row, col=1)
+    else:
+        fig.append_trace(
+            go.Bar(x=date_serie, y=df["MACD_histogram"], name="MACD_histogram"),
+            row=ref_row,
+            col=ref_col,
+        )
+    return fig
+
+
+def add_Scatter(fig, df, target_col, date_col=None, line_color=None):
+    date_serie = df[date_col] if date_col else df.index
+    fig.append_trace(
+        go.Scatter(
+            x=date_serie,
+            y=df[target_col],
+            name=target_col,
+            line={"color": line_color} if line_color else None,
+        ),
+        row=1,
+        col=1,
+    )
+    return fig
+
+
+def add_Scatter_Event(
+    fig,
+    df,
+    target_col,
+    anchor_col,
+    textposition="top center",
+    fontsize=None,
+    marker_symbol=None,
+    event_label=None,
+    date_col=None,
+):
+    """add non-zero points in target_col as events to the main chart"""
+    df_ = df[df[target_col] != 0].copy()
+    date_serie = df_[date_col] if date_col else df_.index
+
+    if event_label:  # ensure it is the right size
+        event_label = (
+            event_label
+            if type(event_label) == list
+            else [event_label for i in range(len(date_serie))]
+        )
+
+    # for marker styling see: https://plotly.com/python/marker-style/
+
+    fig.append_trace(
+        go.Scatter(
+            x=date_serie,
+            y=df_[anchor_col],
+            mode="markers+text",
+            name=target_col,
+            marker_symbol=marker_symbol,
+            textposition=textposition,
+            textfont_size=fontsize,
+            text=event_label if event_label else df_[target_col],
+        ),
+        row=1,
+        col=1,
+    )
+    return fig

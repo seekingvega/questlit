@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import re
+from cmath import e
 from datetime import datetime, timedelta
 
 import pandas as pd
@@ -10,13 +11,14 @@ import plotly.graph_objects as go
 import streamlit as st
 from plotly.subplots import make_subplots
 
-from questlit.ui.charting import add_volume_profile
+from questlit.ui.charting import add_volume_profile, plot_emas
 from questlit.ui.data import (
     load_activities,
     load_candles,
     load_orders,
     load_symbol_info,
 )
+from questlit.ui.ta_utils import add_moving_average
 
 _INTERVALS = ["OneMinute", "FiveMinutes", "OneHour", "OneDay", "OneWeek"]
 _RANGE_PATTERN = re.compile(r"^\s*(\d+)\s*([dwmy])\s*$", re.IGNORECASE)
@@ -50,6 +52,34 @@ def _parse_range(s: str, end: pd.Timestamp) -> pd.Timestamp | None:
     if unit == "m":
         return end - pd.DateOffset(months=n)
     return end - pd.DateOffset(years=n)
+
+
+def _parse_ema_periods(s: str) -> list[int]:
+    """Parse a comma-separated EMA periods string into positive ints.
+
+    Whitespace and empty fragments are ignored. Non-integer fragments are
+    silently skipped so a partially-typed input doesn't raise.
+
+    Examples:
+        >>> _parse_ema_periods("22, 11")
+        [22, 11]
+        >>> _parse_ema_periods("")
+        []
+        >>> _parse_ema_periods("9,,bogus, 21 ")
+        [9, 21]
+    """
+    out: list[int] = []
+    for part in s.split(","):
+        part = part.strip()
+        if not part:
+            continue
+        try:
+            n = int(part)
+        except ValueError:
+            continue
+        if n > 0:
+            out.append(n)
+    return out
 
 
 def _get_activiies(target_acc, symbol, start_time, end_time):
@@ -329,6 +359,9 @@ def main() -> None:
 
     # charting configs
     with charting_cofig_container:
+        ema_durations = st.text_input(
+            "EMA periods", value="11,22", help="comma separated"
+        )
         do_volume_profile = st.toggle("Volume Profile", value=False)
         if do_volume_profile:
             vol_interval = st.selectbox(
@@ -340,7 +373,7 @@ def main() -> None:
                     "OneHour",
                     "HalfHour",
                 ],
-                index=3,
+                index=0,
             )
 
     if not symbol:
@@ -370,9 +403,11 @@ def main() -> None:
                 tab_act.dataframe(pd.DataFrame(activities))
 
     try:
+        # we actually need couple extra days before for technical indicators that does averaging, e.g. EMA
+        candle_start_ts = start_ts - timedelta(weeks=15)
         candles = load_candles(
             symbol,
-            start_time=start_ts,
+            start_time=candle_start_ts,  # start_ts,
             end_time=end_ts + pd.Timedelta(days=1),
             interval=interval,
         )
@@ -385,7 +420,19 @@ def main() -> None:
         return
 
     df = pd.DataFrame(candles)
-    df["start"] = pd.to_datetime(df["start"])
+    df["start"] = (
+        pd.to_datetime(df["start"], utc=True)
+        .dt.tz_convert("America/New_York")
+        .dt.tz_localize(None)
+    )  # parse as UTC (handles mixed DST offsets), shift to ET wall-clock, then drop tz to compare against naive start_ts
+    # Compute EMAs on the full warm-up window first, then slice to the visible
+    # range — otherwise early bars in view would have NaN/noisy EMA values.
+    ema_periods = _parse_ema_periods(ema_durations)
+    for period in ema_periods:
+        add_moving_average(df, period, type="ema", price_col="close", vol_col="volume")
+
+    # remove warm-up window
+    df = df[df["start"] > pd.Timestamp(start_ts)]
 
     info = load_symbol_info(symbol) or {}
     desc = info.get("description") or symbol
@@ -411,6 +458,7 @@ def main() -> None:
         row=1,
         col=1,
     )
+    plot_emas(fig, df, ema_periods)
     fig.add_trace(
         go.Bar(
             x=df["start"],
