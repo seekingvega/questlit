@@ -232,6 +232,7 @@ def plot_orders(fig, orders):
             y=price,
             line=dict(color=color, dash=dash, width=1),
             opacity=0.6,
+            layer="below",
             annotation_text=label,
             annotation_position="top right",
             annotation_font=dict(color=color, size=10),
@@ -350,6 +351,9 @@ def plot_ohlc(
         row_heights=row_heights,
         vertical_spacing=0.03,
     )
+    plot_moving_averages(
+        fig, df
+    )  # plotting averages first to make sure candles are in front
     fig.add_trace(
         go.Candlestick(
             x=df["start"],
@@ -362,7 +366,6 @@ def plot_ohlc(
         row=1,
         col=1,
     )
-    plot_moving_averages(fig, df)
     fig.add_trace(
         go.Bar(
             x=df["start"],
@@ -411,9 +414,18 @@ def main() -> None:
 
     # candles data input
     cols = st.columns([2, 2, 1, 2, 2])
-    symbol = cols[0].text_input("Symbol", value="AAPL").strip().upper()
-    interval = cols[1].selectbox("Interval", _INTERVALS, index=3)
-    range_str = cols[2].text_input("Range", value="6m")
+    symbol = (
+        cols[0]
+        .text_input("Symbol", value="AAPL", key="symbol", bind="query-params")
+        .strip()
+        .upper()
+    )
+    interval = cols[1].selectbox(
+        "Interval", _INTERVALS, index=3, key="interval", bind="query-params"
+    )
+    range_str = cols[2].text_input(
+        "Range", value="6m", key="range", bind="query-params"
+    )
     end = cols[3].date_input("End", value=pd.Timestamp.now().date())
 
     end_ts = pd.Timestamp(end, hour=23, minute=59, second=59)
@@ -459,7 +471,7 @@ def main() -> None:
                     ),
                 )
         with tab_macd:
-            do_macd = st.toggle("MACD", value=False)
+            do_macd = st.toggle("MACD", value=True)
             if do_macd:
                 macd_cols = st.columns(3)
                 macd_fast = macd_cols[0].number_input(
