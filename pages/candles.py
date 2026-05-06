@@ -10,6 +10,7 @@ import pandas as pd
 import plotly.graph_objects as go
 import streamlit as st
 from plotly.subplots import make_subplots
+from streamlit_shortcuts import add_shortcuts
 
 from questlit.ui.charting import (
     add_MACD_trace,
@@ -416,7 +417,13 @@ def main() -> None:
     cols = st.columns([2, 2, 1, 2, 2])
     symbol = (
         cols[0]
-        .text_input("Symbol", value="AAPL", key="symbol", bind="query-params")
+        .text_input(
+            "Symbol",
+            value="AAPL",
+            key="symbol",
+            bind="query-params",
+            placeholder="cmd+/",
+        )
         .strip()
         .upper()
     )
@@ -497,6 +504,9 @@ def main() -> None:
                 rsi_lo = rsi_cols[2].number_input(
                     "lo", value=30, min_value=0, max_value=99, step=1
                 )
+
+    # Keyboard shortcuts
+    add_shortcuts(symbol="cmd+/")
 
     if not symbol:
         st.info("Enter a ticker symbol to load candles.")
