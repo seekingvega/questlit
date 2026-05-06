@@ -26,11 +26,20 @@ def get_volume_profile(
 def add_volume_profile(fig, df: pd.DataFrame):
     """Overlay a horizontal volume-by-price profile on the candle subplot.
 
-    The profile rides on a dedicated overlay x-axis (``xaxis3``) anchored to
-    row 1's price y-axis, so it does not collide with the volume row's
-    ``xaxis2`` reserved by ``make_subplots(rows=2)``.
+    The profile rides on a dedicated overlay x-axis anchored to row 1's price
+    y-axis. The overlay axis index is picked dynamically as the first free
+    ``xaxisN`` slot above those reserved by ``make_subplots`` so it doesn't
+    clobber an existing subplot row's x-axis (e.g. ``xaxis3`` is row 3 when
+    the figure has 3 rows).
     """
     my_volume_profile = get_volume_profile(data=df, do_round=False)
+
+    # Find the next free xaxisN slot (xaxis, xaxis2, ... are reserved by make_subplots).
+    idx = 2
+    while f"xaxis{idx}" in fig.layout:
+        idx += 1
+    axis_layout_key = f"xaxis{idx}"
+    axis_ref = f"x{idx}"
 
     fig.add_trace(
         go.Bar(
@@ -38,7 +47,7 @@ def add_volume_profile(fig, df: pd.DataFrame):
             y=my_volume_profile.index,
             orientation="h",
             name="Volume Profile",
-            xaxis="x3",
+            xaxis=axis_ref,
             yaxis="y",
             marker_color="Gold",  # "rgba(100, 150, 250, 0.3)",
             opacity=0.3,
@@ -49,14 +58,16 @@ def add_volume_profile(fig, df: pd.DataFrame):
     fig.data = (fig.data[-1],) + fig.data[:-1]
 
     fig.update_layout(
-        xaxis3=dict(
-            overlaying="x",
-            side="top",
-            showticklabels=False,
-            showgrid=False,
-            # Stretch range so bars hug the left ~25% of the candle area.
-            range=[0, my_volume_profile.max() * 4],
-        ),
+        **{
+            axis_layout_key: dict(
+                overlaying="x",
+                side="top",
+                showticklabels=False,
+                showgrid=False,
+                # Stretch range so bars hug the left ~25% of the candle area.
+                range=[0, my_volume_profile.max() * 4],
+            )
+        },
         # Re-assert grid on the candle subplot's primary axes — Plotly's
         # overlay-axis rendering otherwise drops them on the underlying axes.
         xaxis=dict(showgrid=False),
@@ -168,48 +179,123 @@ def add_ADX_trace(
 
 
 def add_MACD_trace(fig, df, ref_row, ref_col=1, date_col=None, draw_signal_line=True):
+    """Plot MACD histogram (always) and MACD/signal lines (optional) on one subplot row.
+
+    Histogram bars are colored green when ``MACD_histogram >= 0`` and red when
+    negative — the standard MACD convention. When ``draw_signal_line`` is True,
+    the MACD line (Gold), signal line (DarkGrey) and a dashed zero reference
+    line (Grey) are overlaid on the same row.
+
+    Args:
+        fig: A ``plotly.graph_objects.Figure`` built via ``make_subplots``.
+        df: DataFrame with ``MACD``, ``MACD_signal``, ``MACD_histogram`` columns
+            (use ``add_MACD`` from ``questlit.ui.ta_utils``).
+        ref_row: 1-indexed subplot row to draw on.
+        ref_col: 1-indexed subplot column.
+        date_col: Column name to use for the x-axis. Defaults to ``df.index``.
+        draw_signal_line: If True, overlay the MACD line, signal line and zero
+            reference line on top of the histogram.
+
+    Returns:
+        The figure, mutated in place and returned for chaining.
+    """
     for c in ["MACD", "MACD_histogram", "MACD_signal"]:
         assert c in df.columns, f"required column {c} is missing from input df"
 
     date_serie = df[date_col] if date_col else df.index
+    bar_colors = [
+        "MediumSeaGreen" if v >= 0 else "Crimson" for v in df["MACD_histogram"]
+    ]
+
+    fig.add_trace(
+        go.Bar(
+            x=date_serie,
+            y=df["MACD_histogram"],
+            name="MACD_histogram",
+            marker_color=bar_colors,
+            opacity=0.6,
+        ),
+        row=ref_row,
+        col=ref_col,
+    )
 
     if draw_signal_line:
         fig.add_trace(
             go.Scatter(
-                x=df.index,
-                y=df["MACD_signal"],
-                name="MACD_signal",
-                line={"color": "DarkGrey"},
+                x=date_serie,
+                y=df["MACD"],
+                name="MACD",
+                line={"color": "Gold", "width": 1.5},
             ),
-            row=ref_row,
-            col=ref_col,
-        )
-        fig.add_trace(
-            go.Scatter(x=df.index, y=df["MACD"], name="MACD", line={"color": "Gold"}),
             row=ref_row,
             col=ref_col,
         )
         fig.add_trace(
             go.Scatter(
-                x=df.index,
-                y=[0 for i in df.index],
-                name="MACD_0",
-                line={"color": "Grey"},
+                x=date_serie,
+                y=df["MACD_signal"],
+                name="MACD_signal",
+                line={"color": "DarkGrey", "width": 1.5},
             ),
             row=ref_row,
             col=ref_col,
         )
+        fig.add_trace(
+            go.Scatter(
+                x=date_serie,
+                y=[0] * len(date_serie),
+                name="MACD_0",
+                line={"color": "Grey", "width": 1, "dash": "dash"},
+                showlegend=False,
+                hoverinfo="skip",
+            ),
+            row=ref_row,
+            col=ref_col,
+        )
+    return fig
 
-        # can't put histogram on because requires secondary_y in spec during make_subplots()
-        # fig.add_trace(go.Bar(x = date_serie, y = df['MACD_histogram'], name = 'MACD_histogram'),
-        #     row = ref_row, col = 1, secondary_y = True)
 
-        # applying ranges to yaxis makes the signal line plot look sad
-        # fig.update_yaxes(range=[df['MACD_histogram'].min(), df['MACD_histogram'].max()],
-        #     row= ref_row, col=1)
-    else:
-        fig.append_trace(
-            go.Bar(x=date_serie, y=df["MACD_histogram"], name="MACD_histogram"),
+def add_RSI_trace(fig, df, ref_row, ref_col=1, date_col=None, hi=70, lo=30):
+    """Plot RSI as a line on one subplot row with dotted hi/lo reference lines.
+
+    Args:
+        fig: A ``plotly.graph_objects.Figure`` built via ``make_subplots``.
+        df: DataFrame with an ``RSI`` column (use ``add_RSI`` from
+            ``questlit.ui.ta_utils``).
+        ref_row: 1-indexed subplot row to draw on.
+        ref_col: 1-indexed subplot column.
+        date_col: Column name to use for the x-axis. Defaults to ``df.index``.
+        hi: Upper threshold (overbought reference line). Defaults to 70.
+        lo: Lower threshold (oversold reference line). Defaults to 30.
+
+    Returns:
+        The figure, mutated in place and returned for chaining.
+    """
+    assert "RSI" in df.columns, "required column RSI is missing from input df"
+
+    date_serie = df[date_col] if date_col else df.index
+
+    fig.add_trace(
+        go.Scatter(
+            x=date_serie,
+            y=df["RSI"],
+            mode="lines",
+            name="RSI",
+            line={"color": "MediumPurple", "width": 1.5},
+        ),
+        row=ref_row,
+        col=ref_col,
+    )
+    for level, color in ((hi, "Crimson"), (lo, "MediumSeaGreen")):
+        fig.add_trace(
+            go.Scatter(
+                x=date_serie,
+                y=[level] * len(date_serie),
+                name=f"RSI {level}",
+                line={"color": color, "width": 1, "dash": "dot"},
+                showlegend=False,
+                hoverinfo="skip",
+            ),
             row=ref_row,
             col=ref_col,
         )

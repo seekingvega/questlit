@@ -11,14 +11,19 @@ import plotly.graph_objects as go
 import streamlit as st
 from plotly.subplots import make_subplots
 
-from questlit.ui.charting import add_volume_profile, plot_moving_averages
+from questlit.ui.charting import (
+    add_MACD_trace,
+    add_RSI_trace,
+    add_volume_profile,
+    plot_moving_averages,
+)
 from questlit.ui.data import (
     load_activities,
     load_candles,
     load_orders,
     load_symbol_info,
 )
-from questlit.ui.ta_utils import add_moving_average
+from questlit.ui.ta_utils import add_MACD, add_moving_average, add_RSI
 
 _INTERVALS = ["OneMinute", "FiveMinutes", "OneHour", "OneDay", "OneWeek"]
 _RANGE_PATTERN = re.compile(r"^\s*(\d+)\s*([dwmy])\s*$", re.IGNORECASE)
@@ -323,12 +328,26 @@ def plot_activities(fig, activities, df):
     return fig
 
 
-def plot_ohlc(df: pd.DataFrame, title: str, symbol: str):
+def plot_ohlc(
+    df: pd.DataFrame, title: str, symbol: str, rsi_hi: int = 70, rsi_lo: int = 30
+):
+    has_macd = all(c in df.columns for c in ("MACD", "MACD_signal", "MACD_histogram"))
+    has_rsi = "RSI" in df.columns
+
+    n_extra = sum([has_macd, has_rsi])
+    total_rows = 2 + n_extra
+    if total_rows == 2:
+        row_heights, height = [0.75, 0.25], 700
+    elif total_rows == 3:
+        row_heights, height = [0.6, 0.2, 0.2], 900
+    else:  # 4 rows
+        row_heights, height = [0.5, 0.18, 0.16, 0.16], 1050
+
     fig = make_subplots(
-        rows=2,
+        rows=total_rows,
         cols=1,
         shared_xaxes=True,
-        row_heights=[0.75, 0.25],
+        row_heights=row_heights,
         vertical_spacing=0.03,
     )
     fig.add_trace(
@@ -355,9 +374,20 @@ def plot_ohlc(df: pd.DataFrame, title: str, symbol: str):
         row=2,
         col=1,
     )
+    next_row = 3
+    if has_macd:
+        add_MACD_trace(
+            fig, df, ref_row=next_row, date_col="start", draw_signal_line=True
+        )
+        fig.update_yaxes(title_text="MACD", row=next_row, col=1)
+        next_row += 1
+    if has_rsi:
+        add_RSI_trace(fig, df, ref_row=next_row, date_col="start", hi=rsi_hi, lo=rsi_lo)
+        fig.update_yaxes(title_text="RSI", row=next_row, col=1, range=[0, 100])
+        next_row += 1
     fig.update_layout(
         title=title,
-        height=700,
+        height=height,
         margin=dict(l=10, r=10, t=50, b=10),
         xaxis_rangeslider_visible=False,
     )
@@ -400,26 +430,61 @@ def main() -> None:
 
     # charting configs
     with charting_cofig_container:
-        cols = st.columns(2)
-        ma_type = cols[0].selectbox(
-            "Moving Average Type", options=["EMA", "SMA", "VWAP"]
+        tab_ma, tab_vol, tab_macd, tab_rsi = st.tabs(
+            ["Averages", "Volume", "MACD", "RSI"]
         )
-        ma_durations = cols[1].text_input(
-            "moving average periods", value="11,22", help="comma separated"
-        )
-        do_volume_profile = st.toggle("Volume Profile", value=False)
-        if do_volume_profile:
-            vol_interval = st.selectbox(
-                "Volume Profile Interval",
-                options=[
-                    "OneDay",
-                    "FourHours",
-                    "TwoHours",
-                    "OneHour",
-                    "HalfHour",
-                ],
-                index=0,
+        with tab_ma:
+            cols = st.columns(2)
+            ma_type = cols[0].selectbox("Average Type", options=["EMA", "SMA", "VWAP"])
+            ma_durations = cols[1].text_input(
+                "periods", value="11,22", help="comma separated"
             )
+        with tab_vol:
+            do_volume_profile = st.toggle("Volume Profile", value=False)
+            if do_volume_profile:
+                vol_interval = st.selectbox(
+                    "Volume Profile Interval",
+                    options=[
+                        "OneDay",
+                        "FourHours",
+                        "TwoHours",
+                        "OneHour",
+                        "HalfHour",
+                    ],
+                    index=0,
+                    help=(
+                        "you can use more gradular interval to compute volume profile\n\n"
+                        "but note that only `FourHours` and `TwoHours` have tested to work"
+                        "and you would have about 3-month of data."
+                    ),
+                )
+        with tab_macd:
+            do_macd = st.toggle("MACD", value=False)
+            if do_macd:
+                macd_cols = st.columns(3)
+                macd_fast = macd_cols[0].number_input(
+                    "fast", value=12, min_value=1, step=1
+                )
+                macd_slow = macd_cols[1].number_input(
+                    "slow", value=26, min_value=1, step=1
+                )
+                macd_signal = macd_cols[2].number_input(
+                    "signal", value=9, min_value=1, step=1
+                )
+        with tab_rsi:
+            do_rsi = st.toggle("RSI", value=False)
+            rsi_period, rsi_hi, rsi_lo = 14, 70, 30
+            if do_rsi:
+                rsi_cols = st.columns(3)
+                rsi_period = rsi_cols[0].number_input(
+                    "RSI period", value=14, min_value=2, step=1
+                )
+                rsi_hi = rsi_cols[1].number_input(
+                    "hi", value=70, min_value=1, max_value=100, step=1
+                )
+                rsi_lo = rsi_cols[2].number_input(
+                    "lo", value=30, min_value=0, max_value=99, step=1
+                )
 
     if not symbol:
         st.info("Enter a ticker symbol to load candles.")
@@ -477,6 +542,16 @@ def main() -> None:
         add_moving_average(
             df, period, type=ma_type.lower(), price_col="close", vol_col="volume"
         )
+    if do_macd:
+        add_MACD(
+            df,
+            fast=int(macd_fast),
+            slow=int(macd_slow),
+            signal=int(macd_signal),
+            price_col="close",
+        )
+    if do_rsi:
+        add_RSI(df, n=int(rsi_period), price_col="close")
 
     # remove warm-up window
     df = df[df["start"] > pd.Timestamp(start_ts)]
@@ -486,7 +561,9 @@ def main() -> None:
     desc = info.get("description") or symbol
     exch = info.get("listingExchange")
     title = f"{desc} ({exch})" if exch else desc
-    fig = plot_ohlc(df, title=title, symbol=symbol)
+    fig = plot_ohlc(
+        df, title=title, symbol=symbol, rsi_hi=int(rsi_hi), rsi_lo=int(rsi_lo)
+    )
 
     # Additional overlay to chart
     open_orders = [o for o in orders if o.get("state") != "Executed"]
@@ -512,7 +589,7 @@ def main() -> None:
             fig = add_volume_profile(fig, _df)
             start_date = _df["start"].min().date()
             months = (_df["start"].max() - _df["start"].min()).days / 30.44
-            charting_cofig_container.info(
+            tab_vol.info(
                 f"{months:.0f} months of volume data (available since {start_date})"
             )
 

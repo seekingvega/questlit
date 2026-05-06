@@ -1,7 +1,7 @@
 """Tests for questlit.ui.ta_utils.
 
-Only ``add_moving_average`` is exercised — it's the sole symbol from this
-module that the rest of the project actually imports.
+Exercises the helpers the rest of the project imports: ``add_moving_average``,
+``add_MACD``, and ``add_RSI``.
 """
 
 from __future__ import annotations
@@ -10,7 +10,7 @@ import numpy as np
 import pandas as pd
 import pytest
 
-from questlit.ui.ta_utils import add_moving_average
+from questlit.ui.ta_utils import add_MACD, add_RSI, add_moving_average
 
 
 def _ohlc_df(closes, volumes=None):
@@ -67,3 +67,47 @@ def test_add_moving_average_unknown_type_raises():
     df = _ohlc_df([1, 2, 3])
     with pytest.raises(AssertionError, match="bogus"):
         add_moving_average(df, period=2, type="bogus")
+
+
+def test_add_MACD_adds_three_columns():
+    df = _ohlc_df(list(range(1, 41)))
+    out = add_MACD(df, fast=12, slow=26, signal=9)
+    assert out is df
+    for col in ("MACD", "MACD_signal", "MACD_histogram"):
+        assert col in out.columns
+    # signal needs `slow + signal - 1` warm-up rows before it's defined
+    assert out["MACD_signal"].iloc[-1] == pytest.approx(out["MACD_signal"].iloc[-1])
+    assert pd.notna(out["MACD_signal"].iloc[-1])
+
+
+def test_add_MACD_histogram_equals_macd_minus_signal():
+    df = _ohlc_df([10.0 + i * 0.5 for i in range(50)])
+    add_MACD(df, fast=12, slow=26, signal=9)
+    expected = df["MACD"] - df["MACD_signal"]
+    pd.testing.assert_series_equal(
+        df["MACD_histogram"], expected, check_names=False
+    )
+
+
+def test_add_MACD_custom_price_col():
+    df = pd.DataFrame({"close": [10.0 + i * 0.3 for i in range(50)]})
+    add_MACD(df, fast=12, slow=26, signal=9, price_col="close")
+    assert "MACD" in df.columns
+    assert pd.notna(df["MACD"].iloc[-1])
+
+
+def test_add_RSI_adds_rsi_column():
+    df = _ohlc_df([10.0 + (i % 5) * 0.5 for i in range(40)])
+    out = add_RSI(df, n=14)
+    assert out is df
+    assert "RSI" in out.columns
+    rsi_valid = out["RSI"].dropna()
+    assert (rsi_valid.between(0, 100)).all()
+
+
+def test_add_RSI_custom_price_col():
+    df = pd.DataFrame({"close": [10.0 + (i % 7) * 0.4 for i in range(40)]})
+    add_RSI(df, n=14, price_col="close")
+    assert "RSI" in df.columns
+    assert pd.notna(df["RSI"].iloc[-1])
+    assert 0 <= df["RSI"].iloc[-1] <= 100
