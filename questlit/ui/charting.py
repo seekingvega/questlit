@@ -302,6 +302,38 @@ def add_RSI_trace(fig, df, ref_row, ref_col=1, date_col=None, hi=70, lo=30):
     return fig
 
 
+def add_ATR_trace(fig, df, ref_row, ref_col=1, date_col=None):
+    """Plot ATR as a single line on one subplot row.
+
+    Args:
+        fig: A ``plotly.graph_objects.Figure`` built via ``make_subplots``.
+        df: DataFrame with an ``ATR`` column (use ``add_ATR`` from
+            ``questlit.ui.ta_utils``).
+        ref_row: 1-indexed subplot row to draw on.
+        ref_col: 1-indexed subplot column.
+        date_col: Column name to use for the x-axis. Defaults to ``df.index``.
+
+    Returns:
+        The figure, mutated in place and returned for chaining.
+    """
+    assert "ATR" in df.columns, "required column ATR is missing from input df"
+
+    date_serie = df[date_col] if date_col else df.index
+
+    fig.add_trace(
+        go.Scatter(
+            x=date_serie,
+            y=df["ATR"],
+            mode="lines",
+            name="ATR",
+            line={"color": "Orange", "width": 1.5},
+        ),
+        row=ref_row,
+        col=ref_col,
+    )
+    return fig
+
+
 def add_Scatter(fig, df, target_col, date_col=None, line_color=None):
     date_serie = df[date_col] if date_col else df.index
     fig.append_trace(

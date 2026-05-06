@@ -52,20 +52,52 @@ def add_MACD(df, fast: int = 12, slow: int = 26, signal: int = 9, price_col="Clo
 def add_ATR(
     df,
     period: int = 13,
-    use_ema=False,
-    channel_dict={"ema_22": [1, 2, 3]},
-    col_name=None,
-    return_TR=True,
-    normalize=False,
+    use_ema: bool = False,
+    channel_dict: dict | None = None,
+    col_name: str | None = None,
+    return_TR: bool = True,
+    normalize: bool = False,
+    high_col: str = "High",
+    low_col: str = "Low",
+    close_col: str = "Close",
 ):
-    """
-    Average True Range
+    """Average True Range (ATR), a volatility indicator.
+
+    Computes True Range row-wise as
+    ``max(high - low, |high - prev_close|, |low - prev_close|)`` then
+    averages it over ``period`` bars (simple by default; EMA if
+    ``use_ema=True``). Mutates ``df`` in place by adding ``ATR`` (or
+    ``col_name`` if provided), and ``TR`` when ``return_TR=True``.
+
     Args:
-        channel_dict:
-        use_ema: use exponential moving average instead of simple
-        channel_dict: name of price and list of ATR multiples to apply
-        col_name: ATR column name, if None default is "ATR"
-        normalize: if true, show ATR and TR as % of Close
+        df: DataFrame with high/low/close columns.
+        period: Lookback window for the moving average. Defaults to 13.
+        use_ema: If True, use an exponential MA on True Range instead of
+            a simple rolling mean.
+        channel_dict: Optional ``{ma_col: [multiples]}`` mapping. For each
+            entry, adds ``ch:{ma_col}+{m}atr`` / ``ch:{ma_col}-{m}atr``
+            channels around an existing MA column. Skipped when ``None``.
+        col_name: Output column name for ATR. Defaults to ``"ATR"``.
+        return_TR: If True, also write the per-bar True Range as ``TR``.
+        normalize: If True, divide ATR/TR by ``close_col`` (% of price).
+        high_col: Name of the high column (defaults to ``"High"``).
+        low_col: Name of the low column (defaults to ``"Low"``).
+        close_col: Name of the close column (defaults to ``"Close"``).
+
+    Returns:
+        The mutated ``df`` for chaining.
+
+    Examples:
+        >>> import pandas as pd
+        >>> df = pd.DataFrame({
+        ...     "High":  [11.0, 12.0, 13.0, 14.0],
+        ...     "Low":   [10.0, 11.0, 12.0, 13.0],
+        ...     "Close": [10.5, 11.5, 12.5, 13.5],
+        ... })
+        >>> _ = add_ATR(df, period=2, return_TR=True)
+        >>> sorted(set(df.columns) - {"High", "Low", "Close"})
+        ['ATR', 'TR']
+
     ref: https://www.learnpythonwithrune.org/calculate-the-average-true-range-atr-easy-with-pandas-dataframes/
     ref: https://stackoverflow.com/questions/40256338/calculating-average-true-range-atr-on-ohlc-data-with-python
     """
@@ -74,23 +106,23 @@ def add_ATR(
     ), "channels can only be added on top of the base ATR (not when col_name is provided)"
     assert col_name not in df.columns, f"{col_name} already exists in input dataframe"
 
-    high_low = df["High"] - df["Low"]
-    high_close = np.abs(df["High"] - df["Close"].shift())
-    low_close = np.abs(df["Low"] - df["Close"].shift())
+    high_low = df[high_col] - df[low_col]
+    high_close = np.abs(df[high_col] - df[close_col].shift())
+    low_close = np.abs(df[low_col] - df[close_col].shift())
 
     ranges = pd.concat([high_low, high_close, low_close], axis=1)
     true_range = np.max(ranges, axis=1)
 
     if return_TR:
         df["TR"] = true_range
-        df["TR"] /= df["Close"] if normalize else 1
+        df["TR"] /= df[close_col] if normalize else 1
     col_name = col_name if col_name else "ATR"
     df[col_name] = (
         true_range.ewm(span=period).mean()
         if use_ema
         else true_range.rolling(period).mean()
     )
-    df[col_name] /= df["Close"] if normalize else 1
+    df[col_name] /= df[close_col] if normalize else 1
 
     if channel_dict:
         for k, l_channels in channel_dict.items():

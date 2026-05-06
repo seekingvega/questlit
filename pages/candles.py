@@ -13,6 +13,7 @@ from plotly.subplots import make_subplots
 from streamlit_shortcuts import add_shortcuts
 
 from questlit.ui.charting import (
+    add_ATR_trace,
     add_MACD_trace,
     add_RSI_trace,
     add_volume_profile,
@@ -24,7 +25,7 @@ from questlit.ui.data import (
     load_orders,
     load_symbol_info,
 )
-from questlit.ui.ta_utils import add_MACD, add_moving_average, add_RSI
+from questlit.ui.ta_utils import add_ATR, add_MACD, add_moving_average, add_RSI
 
 _INTERVALS = ["OneMinute", "FiveMinutes", "OneHour", "OneDay", "OneWeek"]
 _RANGE_PATTERN = re.compile(r"^\s*(\d+)\s*([dwmy])\s*$", re.IGNORECASE)
@@ -335,15 +336,18 @@ def plot_ohlc(
 ):
     has_macd = all(c in df.columns for c in ("MACD", "MACD_signal", "MACD_histogram"))
     has_rsi = "RSI" in df.columns
+    has_atr = "ATR" in df.columns
 
-    n_extra = sum([has_macd, has_rsi])
+    n_extra = sum([has_macd, has_rsi, has_atr])
     total_rows = 2 + n_extra
     if total_rows == 2:
         row_heights, height = [0.75, 0.25], 700
     elif total_rows == 3:
         row_heights, height = [0.6, 0.2, 0.2], 900
-    else:  # 4 rows
+    elif total_rows == 4:
         row_heights, height = [0.5, 0.18, 0.16, 0.16], 1050
+    else:  # 5 rows
+        row_heights, height = [0.44, 0.16, 0.14, 0.13, 0.13], 1200
 
     fig = make_subplots(
         rows=total_rows,
@@ -388,6 +392,10 @@ def plot_ohlc(
     if has_rsi:
         add_RSI_trace(fig, df, ref_row=next_row, date_col="start", hi=rsi_hi, lo=rsi_lo)
         fig.update_yaxes(title_text="RSI", row=next_row, col=1, range=[0, 100])
+        next_row += 1
+    if has_atr:
+        add_ATR_trace(fig, df, ref_row=next_row, date_col="start")
+        fig.update_yaxes(title_text="ATR", row=next_row, col=1)
         next_row += 1
     fig.update_layout(
         title=title,
@@ -449,8 +457,8 @@ def main() -> None:
 
     # charting configs
     with charting_cofig_container:
-        tab_ma, tab_vol, tab_macd, tab_rsi = st.tabs(
-            ["Averages", "Volume", "MACD", "RSI"]
+        tab_ma, tab_vol, tab_macd, tab_others = st.tabs(
+            ["Averages", "Volume", "MACD", ":material/more:"]
         )
         with tab_ma:
             cols = st.columns(2)
@@ -490,7 +498,7 @@ def main() -> None:
                 macd_signal = macd_cols[2].number_input(
                     "signal", value=9, min_value=1, step=1
                 )
-        with tab_rsi:
+        with tab_others:
             do_rsi = st.toggle("RSI", value=False)
             rsi_period, rsi_hi, rsi_lo = 14, 70, 30
             if do_rsi:
@@ -503,6 +511,16 @@ def main() -> None:
                 )
                 rsi_lo = rsi_cols[2].number_input(
                     "lo", value=30, min_value=0, max_value=99, step=1
+                )
+
+            cols = st.columns(2)
+            do_atr = cols[0].toggle("ATR", value=True)
+            if do_atr:
+                atr_use_ema = cols[1].toggle(
+                    "use EMA", value=True, help="use EMA to average True Range?"
+                )
+                atr_period = st.number_input(
+                    "period", value=13, min_value=2, step=1, help="ATR period"
                 )
 
     # Keyboard shortcuts
@@ -574,6 +592,17 @@ def main() -> None:
         )
     if do_rsi:
         add_RSI(df, n=int(rsi_period), price_col="close")
+    if do_atr:
+        add_ATR(
+            df,
+            period=int(atr_period),
+            use_ema=atr_use_ema,
+            high_col="high",
+            low_col="low",
+            close_col="close",
+            channel_dict=None,
+            return_TR=False,
+        )
 
     # remove warm-up window
     df = df[df["start"] > pd.Timestamp(start_ts)]

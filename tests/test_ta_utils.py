@@ -1,7 +1,7 @@
 """Tests for questlit.ui.ta_utils.
 
 Exercises the helpers the rest of the project imports: ``add_moving_average``,
-``add_MACD``, and ``add_RSI``.
+``add_MACD``, ``add_RSI``, and ``add_ATR``.
 """
 
 from __future__ import annotations
@@ -10,13 +10,15 @@ import numpy as np
 import pandas as pd
 import pytest
 
-from questlit.ui.ta_utils import add_MACD, add_RSI, add_moving_average
+from questlit.ui.ta_utils import add_ATR, add_MACD, add_RSI, add_moving_average
 
 
-def _ohlc_df(closes, volumes=None):
+def _ohlc_df(closes, volumes=None, highs=None, lows=None):
     n = len(closes)
     return pd.DataFrame(
         {
+            "High": highs if highs is not None else [c + 1 for c in closes],
+            "Low": lows if lows is not None else [c - 1 for c in closes],
             "Close": closes,
             "Volume": volumes if volumes is not None else [100] * n,
         }
@@ -111,3 +113,64 @@ def test_add_RSI_custom_price_col():
     assert "RSI" in df.columns
     assert pd.notna(df["RSI"].iloc[-1])
     assert 0 <= df["RSI"].iloc[-1] <= 100
+
+
+def test_add_ATR_adds_atr_column():
+    df = _ohlc_df([10.0 + i * 0.5 for i in range(20)])
+    out = add_ATR(df, period=5)
+    assert out is df
+    assert "ATR" in out.columns
+    assert "TR" in out.columns
+    assert pd.notna(out["ATR"].iloc[-1])
+
+
+def test_add_ATR_uses_true_range_formula():
+    highs = [11.0, 12.5, 13.0, 14.5, 15.0]
+    lows = [10.0, 11.0, 12.0, 13.0, 14.0]
+    closes = [10.5, 12.0, 12.5, 14.0, 14.5]
+    df = _ohlc_df(closes, highs=highs, lows=lows)
+    add_ATR(df, period=2, return_TR=True, channel_dict=None)
+
+    expected_tr = []
+    for i in range(len(closes)):
+        hl = highs[i] - lows[i]
+        if i == 0:
+            expected_tr.append(hl)
+        else:
+            hpc = abs(highs[i] - closes[i - 1])
+            lpc = abs(lows[i] - closes[i - 1])
+            expected_tr.append(max(hl, hpc, lpc))
+    pd.testing.assert_series_equal(
+        df["TR"].reset_index(drop=True),
+        pd.Series(expected_tr),
+        check_names=False,
+        check_dtype=False,
+    )
+
+    expected_atr = pd.Series(expected_tr).rolling(2).mean()
+    pd.testing.assert_series_equal(
+        df["ATR"].reset_index(drop=True),
+        expected_atr,
+        check_names=False,
+        check_dtype=False,
+    )
+
+
+def test_add_ATR_custom_price_cols():
+    df = pd.DataFrame(
+        {
+            "high": [11.0 + i for i in range(10)],
+            "low": [10.0 + i for i in range(10)],
+            "close": [10.5 + i for i in range(10)],
+        }
+    )
+    add_ATR(
+        df,
+        period=3,
+        high_col="high",
+        low_col="low",
+        close_col="close",
+        channel_dict=None,
+    )
+    assert "ATR" in df.columns
+    assert pd.notna(df["ATR"].iloc[-1])
