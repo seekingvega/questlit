@@ -323,6 +323,47 @@ def plot_activities(fig, activities, df):
     return fig
 
 
+def plot_ohlc(df: pd.DataFrame, title: str, symbol: str):
+    fig = make_subplots(
+        rows=2,
+        cols=1,
+        shared_xaxes=True,
+        row_heights=[0.75, 0.25],
+        vertical_spacing=0.03,
+    )
+    fig.add_trace(
+        go.Candlestick(
+            x=df["start"],
+            open=df["open"],
+            high=df["high"],
+            low=df["low"],
+            close=df["close"],
+            name=symbol,
+        ),
+        row=1,
+        col=1,
+    )
+    plot_moving_averages(fig, df)
+    fig.add_trace(
+        go.Bar(
+            x=df["start"],
+            y=df["volume"],
+            name="Volume",
+            showlegend=False,
+            marker_color="MediumPurple",  # "#636efa",
+        ),
+        row=2,
+        col=1,
+    )
+    fig.update_layout(
+        title=title,
+        height=700,
+        margin=dict(l=10, r=10, t=50, b=10),
+        xaxis_rangeslider_visible=False,
+    )
+    return fig
+
+
 def main() -> None:
     st.set_page_config(layout="wide", initial_sidebar_state="collapsed")
 
@@ -440,42 +481,14 @@ def main() -> None:
     # remove warm-up window
     df = df[df["start"] > pd.Timestamp(start_ts)]
 
+    # Create OHLC Chart
     info = load_symbol_info(symbol) or {}
     desc = info.get("description") or symbol
     exch = info.get("listingExchange")
     title = f"{desc} ({exch})" if exch else desc
+    fig = plot_ohlc(df, title=title, symbol=symbol)
 
-    fig = make_subplots(
-        rows=2,
-        cols=1,
-        shared_xaxes=True,
-        row_heights=[0.75, 0.25],
-        vertical_spacing=0.03,
-    )
-    fig.add_trace(
-        go.Candlestick(
-            x=df["start"],
-            open=df["open"],
-            high=df["high"],
-            low=df["low"],
-            close=df["close"],
-            name=symbol,
-        ),
-        row=1,
-        col=1,
-    )
-    plot_moving_averages(fig, df)
-    fig.add_trace(
-        go.Bar(
-            x=df["start"],
-            y=df["volume"],
-            name="Volume",
-            showlegend=False,
-            marker_color="MediumPurple",  # "#636efa",
-        ),
-        row=2,
-        col=1,
-    )
+    # Additional overlay to chart
     open_orders = [o for o in orders if o.get("state") != "Executed"]
     executed_orders = [o for o in orders if o.get("state") == "Executed"]
     plot_orders(fig, open_orders)
@@ -502,12 +515,7 @@ def main() -> None:
             charting_cofig_container.info(
                 f"{months:.0f} months of volume data (available since {start_date})"
             )
-    fig.update_layout(
-        title=title,
-        height=700,
-        margin=dict(l=10, r=10, t=50, b=10),
-        xaxis_rangeslider_visible=False,
-    )
+
     st.plotly_chart(fig, width="stretch")
 
 
