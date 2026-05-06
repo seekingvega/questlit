@@ -75,7 +75,7 @@ def get_moving_average_col(df_columns):
 _EMA_COLORS = ["Violet", "YellowGreen", "Teal", "HotPink", "LimeGreen"]
 
 
-def plot_emas(fig, df, periods):
+def plot_moving_averages(fig, df):
     """Overlay pre-computed EMA lines on the candle subplot, one trace per period.
 
     Pure plotting helper: expects each ``ema_{period}`` column to already
@@ -94,14 +94,14 @@ def plot_emas(fig, df, periods):
     Returns:
         The figure, mutated in place and returned for chaining.
     """
-    for i, period in enumerate(periods):
-        col = f"ema_{period}"
+    target_cols = get_moving_average_col(df.columns)
+    for i, col in enumerate(target_cols):
         fig.add_trace(
             go.Scatter(
                 x=df["start"],
                 y=df[col],
                 mode="lines",
-                name=f"EMA {period}",
+                name=col,
                 line=dict(color=_EMA_COLORS[i % len(_EMA_COLORS)], width=1),
                 opacity=0.8,
             ),

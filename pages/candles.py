@@ -11,7 +11,7 @@ import plotly.graph_objects as go
 import streamlit as st
 from plotly.subplots import make_subplots
 
-from questlit.ui.charting import add_volume_profile, plot_emas
+from questlit.ui.charting import add_volume_profile, plot_moving_averages
 from questlit.ui.data import (
     load_activities,
     load_candles,
@@ -359,8 +359,12 @@ def main() -> None:
 
     # charting configs
     with charting_cofig_container:
-        ema_durations = st.text_input(
-            "EMA periods", value="11,22", help="comma separated"
+        cols = st.columns(2)
+        ma_type = cols[0].selectbox(
+            "Moving Average Type", options=["EMA", "SMA", "VWAP"]
+        )
+        ma_durations = cols[1].text_input(
+            "moving average periods", value="11,22", help="comma separated"
         )
         do_volume_profile = st.toggle("Volume Profile", value=False)
         if do_volume_profile:
@@ -427,9 +431,11 @@ def main() -> None:
     )  # parse as UTC (handles mixed DST offsets), shift to ET wall-clock, then drop tz to compare against naive start_ts
     # Compute EMAs on the full warm-up window first, then slice to the visible
     # range — otherwise early bars in view would have NaN/noisy EMA values.
-    ema_periods = _parse_ema_periods(ema_durations)
-    for period in ema_periods:
-        add_moving_average(df, period, type="ema", price_col="close", vol_col="volume")
+    ma_periods = _parse_ema_periods(ma_durations)
+    for period in ma_periods:
+        add_moving_average(
+            df, period, type=ma_type.lower(), price_col="close", vol_col="volume"
+        )
 
     # remove warm-up window
     df = df[df["start"] > pd.Timestamp(start_ts)]
@@ -458,7 +464,7 @@ def main() -> None:
         row=1,
         col=1,
     )
-    plot_emas(fig, df, ema_periods)
+    plot_moving_averages(fig, df)
     fig.add_trace(
         go.Bar(
             x=df["start"],
