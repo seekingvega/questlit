@@ -5,6 +5,7 @@ from __future__ import annotations
 import re
 from cmath import e
 from datetime import datetime, timedelta
+from urllib.parse import urlencode
 
 import pandas as pd
 import plotly.graph_objects as go
@@ -406,17 +407,25 @@ def plot_ohlc(
     return fig
 
 
+def get_st_app_url(qp: dict = st.query_params.to_dict()):
+    qs = urlencode(qp, doseq=True)
+    base = st.context.url.split("?")[0].split("#")[0]
+    return f"{base}?{qs}" if qs else base
+
+
 def main() -> None:
     st.set_page_config(layout="wide", initial_sidebar_state="collapsed")
 
     # account selection
     accounts = st.session_state["accounts"]
-    acc_dict = {f"{a['number']} ({a['type']})": a["number"] for a in accounts}
+    acc_dict = {f"{a['number']}-{a['type']}": a["number"] for a in accounts}
     with st.sidebar:
         select_acc = st.selectbox(
             "Account",
             help="select an account to view past trades for your Symbol",
             options=[""] + list(acc_dict.keys()),
+            key="account",
+            bind="query-params",
         )
         target_acc = acc_dict[select_acc] if select_acc else None
         charting_cofig_container = st.expander(f"Charting", icon=":material/settings:")
@@ -441,7 +450,9 @@ def main() -> None:
     range_str = cols[2].text_input(
         "Range", value="6m", key="range", bind="query-params"
     )
-    end = cols[3].date_input("End", value=pd.Timestamp.now().date())
+    end = cols[3].date_input(
+        "End", value=pd.Timestamp.now().date(), key="end", bind="query-params"
+    )
 
     end_ts = pd.Timestamp(end, hour=23, minute=59, second=59)
     start_ts = _parse_range(range_str, end_ts)
@@ -525,6 +536,14 @@ def main() -> None:
 
     # Keyboard shortcuts
     add_shortcuts(symbol="cmd+/")
+
+    # show monthly chart url if on daily chart
+    if interval in ["OneDay"]:
+        qp = st.query_params.to_dict()
+        qp["interval"] = "OneWeek"
+        qp["range"] = "2y"
+        app_url = get_st_app_url(qp)
+        st.sidebar.caption(f"Open [Weekly Chart]({app_url}) for {symbol}")
 
     if not symbol:
         st.info("Enter a ticker symbol to load candles.")
