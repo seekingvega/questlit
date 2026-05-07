@@ -48,7 +48,7 @@ def load_orders(
     )
 
 
-@st.cache_data(ttl=60)
+@st.cache_data(ttl="1h")
 def load_activities(
     account_id: str | int, start_time: datetime, end_time: datetime
 ) -> list[dict]:

@@ -663,7 +663,13 @@ def main() -> None:
                 f"{months:.0f} months of volume data (available since {start_date})"
             )
 
-    st.plotly_chart(fig, width="stretch")
+    plotly_fname = f"{symbol}-{interval}-{range_str}-{str(end).replace('-','')}"
+    plotly_fname += f"-acc_{target_acc}" if select_acc else ""
+    st.plotly_chart(
+        fig,
+        width="stretch",
+        config={"toImageButtonOptions": {"filename": plotly_fname}},
+    )
 
 
 main()
