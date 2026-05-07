@@ -27,8 +27,12 @@ def load_accounts(_seed: str | None = None) -> list[dict]:
 
 
 @st.cache_data(ttl=60)
-def load_positions(_seed: str | None = None) -> list[dict]:
-    return QuestradeClient(seed_refresh_token=_seed).get_all_positions()
+def load_positions(account_id: str | None = None) -> list[dict]:
+    return (
+        QuestradeClient().get_positions(account_id)
+        if account_id
+        else QuestradeClient().get_all_positions()
+    )
 
 
 @st.cache_data(ttl=60)

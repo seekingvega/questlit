@@ -6,14 +6,15 @@ from questlit.ui.auth import ensure_authenticated
 
 
 def main() -> None:
-    st.set_page_config(page_title="QuestLit", layout="wide")
+    st.set_page_config(page_title="QuestLit", layout="wide", page_icon="asset/logo.png")
     ensure_authenticated()
 
     st.navigation(
         [
+            st.Page("pages/welcome.py", title="welcome"),
             st.Page(
                 "pages/dashboard.py",
-                title="Dashboard",
+                title="Overview",
                 icon=":material/dashboard:",
             ),
             st.Page(
@@ -21,7 +22,6 @@ def main() -> None:
                 title="Candles",
                 icon=":material/candlestick_chart:",
             ),
-            st.Page("pages/welcome.py", title="welcome"),
         ],
         position="top",
     ).run()
