@@ -295,7 +295,8 @@ def plot_activities(fig, activities, df):
             buckets["Dividend"]["x"].append(date)
             buckets["Dividend"]["y"].append(_div_y(date))
             buckets["Dividend"]["text"].append(
-                f"{date_str} DIVIDEND {symbol} net ${net:,.2f}"
+                f"DIVIDEND net ${net:,.2f} ({a['description']})"
+                # f"{date_str} DIVIDEND {symbol} net ${net:,.2f}"
             )
             continue
         action = a.get("action", "")
