@@ -5,7 +5,9 @@
 # all functions accept input df from yfinance with columns:
 #  ['Open', 'High', 'Low', 'Close', 'Adj Close', 'Volume']
 ###############################################################################
-import os, sys
+import os
+import sys
+
 import numpy as np
 import pandas as pd
 
@@ -321,14 +323,23 @@ def market_classification(
     class_names_map={0: "rangebound", 1: "trending-up", -1: "trending-down"},
 ):
     """detect trending-up, trending-down, or rangebound"""
-    df["period_high"] = df["High"].rolling(period).max().shift()
-    df["period_low"] = df["Low"].rolling(period).min().shift()
 
+    # Calculates period highs and lows —
+    # computes the rolling maximum and minimum over the given `period` window (shifted back by one bar)
+    df["period_high"] = df["high"].rolling(period).max().shift()
+    df["period_low"] = df["low"].rolling(period).min().shift()
+
+    # Extracts unique values —
+    # gets the unique period highs and lows from the last `period` bars and rounds them to 2 decimals
     highs = [round(p, 2) for p in df["period_high"][-period:].unique().tolist()]
     if debug:
         print(f"{period} bars highs: {highs}")
-    hh = sorted(highs) == highs
-    lh = sorted(highs, reverse=True) == highs
+    hh = (
+        sorted(highs) == highs
+    )  #  checks if highs are in ascending order (**higher highs**)
+    lh = (
+        sorted(highs, reverse=True) == highs
+    )  # checks if highs are in descending order (**lower highs**)
 
     lows = [round(p, 2) for p in df["period_low"][-period:].unique().tolist()]
     if debug:

@@ -26,10 +26,20 @@ from questlit.ui.data import (
     load_orders,
     load_symbol_info,
 )
-from questlit.ui.ta_utils import add_ATR, add_MACD, add_moving_average, add_RSI
+from questlit.ui.ta_utils import (
+    add_ATR,
+    add_MACD,
+    add_moving_average,
+    add_RSI,
+    market_classification,
+)
 
 _INTERVALS = ["OneMinute", "FiveMinutes", "OneHour", "OneDay", "OneWeek"]
 _RANGE_PATTERN = re.compile(r"^\s*(\d+)\s*([dwmy])\s*$", re.IGNORECASE)
+_MKT_STRUCTURE_PERIOD_DICT = {
+    "OneDay": 40,  # about 2 months, out of 6
+    "OneWeek": 32,  # about 8 months, out of 24
+}
 
 
 def _parse_range(s: str, end: pd.Timestamp) -> pd.Timestamp | None:
@@ -246,7 +256,7 @@ def plot_orders(fig, orders):
     return fig
 
 
-def plot_activities(fig, activities, df):
+def plot_activities(fig, activities, df, opacity: float = 0.6, arrow_size=10):
     """Overlay trade fills and dividends as markers on the candle subplot.
 
     Buys render as green up-triangles, sells as orange down-triangles, anchored
@@ -310,9 +320,13 @@ def plot_activities(fig, activities, df):
 
     # css color names: https://www.w3schools.com/cssref/css_colors.php
     styles = {
-        "Buy": dict(symbol="triangle-up", color="DodgerBlue", size=10, opacity=0.6),
-        "Sell": dict(symbol="triangle-down", color="DeepPink", size=10, opacity=0.6),
-        "Dividend": dict(symbol="diamond", color="Gold", size=8, opacity=0.6),
+        "Buy": dict(
+            symbol="triangle-up", color="DodgerBlue", size=arrow_size, opacity=opacity
+        ),
+        "Sell": dict(
+            symbol="triangle-down", color="DeepPink", size=arrow_size, opacity=opacity
+        ),
+        "Dividend": dict(symbol="diamond", color="Gold", size=8, opacity=opacity),
     }
     for name, data in buckets.items():
         if not data["x"]:
@@ -452,8 +466,13 @@ def main() -> None:
         "Range", value="6m", key="range", bind="query-params"
     )
     end = cols[3].date_input(
-        "End", value=pd.Timestamp.now().date(), key="end", bind="query-params"
+        "End",
+        value=pd.Timestamp.now().date(),
+        key="end",
+        bind="query-params",
+        max_value=pd.Timestamp.now().date(),
     )
+    end_date_warning_container = cols[3].empty()
 
     end_ts = pd.Timestamp(end, hour=23, minute=59, second=59)
     start_ts = _parse_range(range_str, end_ts)
@@ -524,7 +543,7 @@ def main() -> None:
                 rsi_lo = rsi_cols[2].number_input(
                     "lo", value=30, min_value=0, max_value=99, step=1
                 )
-
+            st.divider()
             cols = st.columns(2)
             do_atr = cols[0].toggle("ATR", value=True)
             if do_atr:
@@ -532,11 +551,24 @@ def main() -> None:
                     "use EMA", value=True, help="use EMA to average True Range?"
                 )
                 atr_period = st.number_input(
-                    "period", value=13, min_value=2, step=1, help="ATR period"
+                    "ATR period", value=13, min_value=2, step=1, help="ATR period"
                 )
+            st.divider()
+            mkt_structure_int = (
+                st.number_input(
+                    "Market Structure Period",
+                    value=_MKT_STRUCTURE_PERIOD_DICT[interval],
+                    help="used to set the sliding window for computing period highs and lows",
+                )
+                if interval in _MKT_STRUCTURE_PERIOD_DICT.keys()
+                else None
+            )
 
     # Keyboard shortcuts
     add_shortcuts(symbol="cmd+/")
+
+    # additional display container
+    etc_dis_container = st.sidebar.container()
 
     # show monthly chart url if on daily chart
     if interval in ["OneDay"]:
@@ -544,21 +576,32 @@ def main() -> None:
         qp["interval"] = "OneWeek"
         qp["range"] = "2y"
         app_url = get_st_app_url(qp)
-        st.sidebar.caption(f"Open [Weekly Chart]({app_url}) for {symbol}")
+        etc_dis_container.caption(f"Open [Weekly Chart]({app_url}) for {symbol}")
 
     if not symbol:
         st.info("Enter a ticker symbol to load candles.")
         return
     else:
+        annotation_config_container = st.sidebar.expander(
+            "annotation", icon=":material/settings:"
+        )
+        with annotation_config_container:
+            show_orders = st.toggle("show orders", value=True)
+            show_activities = st.toggle("show activities", value=True)
+            arrow_size = st.slider("arrow size", min_value=5, max_value=20, value=10)
+            arrow_opacity = st.slider(
+                "arrow opacity", min_value=0.1, max_value=1.0, value=0.6, step=0.05
+            )
+
         # let's load orders with start_ts and end_ts
         orders = (
             _get_orders(target_acc, symbol, start_time=start_ts, end_time=end_ts)
-            if target_acc
+            if target_acc and show_orders
             else []
         )
         activities = (
             _get_activiies(target_acc, symbol, start_time=start_ts, end_time=end_ts)
-            if target_acc
+            if target_acc and show_activities
             else []
         )
 
@@ -639,12 +682,16 @@ def main() -> None:
     # Additional overlay to chart
     open_orders = [o for o in orders if o.get("state") != "Executed"]
     executed_orders = [o for o in orders if o.get("state") == "Executed"]
-    plot_orders(fig, open_orders)
-    plot_activities(
-        fig,
-        [_executed_order_to_activity(o) for o in executed_orders] + activities,
-        df,
-    )
+    if show_orders:
+        plot_orders(fig, open_orders)
+    if show_activities:
+        plot_activities(
+            fig,
+            [_executed_order_to_activity(o) for o in executed_orders] + activities,
+            df,
+            arrow_size=arrow_size,
+            opacity=arrow_opacity,
+        )
     if do_volume_profile:
         v_candles = load_candles(
             symbol,
@@ -663,6 +710,26 @@ def main() -> None:
             tab_vol.info(
                 f"{months:.0f} months of volume data (available since {start_date})"
             )
+
+    # add Market Structure
+    if mkt_structure_int:
+        if len(df) > mkt_structure_int:
+            str_mkts = market_classification(df, mkt_structure_int)
+            mkts_badge_dict = {
+                "trending-up": ":green-badge[:material/trending_up: ]",
+                "rangebound": ":blue-badge[:material/trending_flat:]",
+                "trending-down": ":red-badge[:material/trending_down: ]",
+            }
+            etc_dis_container.markdown(
+                f"market structure: {mkts_badge_dict[str_mkts]}",
+                help=f"{str_mkts} based on highs and lows computed from sliding window of {mkt_structure_int} bars",
+            )
+    if end_ts.date() != datetime.today().date():
+        end_date_warning_container.badge(
+            f"selected end date is not Today",
+            icon=":material/date_range:",
+            color="yellow",
+        )
 
     plotly_fname = f"{symbol}-{interval}-{range_str}-{str(end).replace('-','')}"
     plotly_fname += f"-acc_{target_acc}" if select_acc else ""
