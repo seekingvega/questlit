@@ -100,7 +100,7 @@ def _parse_ema_periods(s: str) -> list[int]:
     return out
 
 
-def _get_activiies(target_acc, symbol, start_time, end_time):
+def _get_activities(target_acc, symbol, start_time, end_time):
     activities = load_activities(target_acc, start_time=start_time, end_time=end_time)
     activities = (
         [
@@ -137,7 +137,7 @@ def _get_orders(target_acc, symbol, start_time, end_time):
         and o["state"] in ("Executed")
         and pd.to_datetime(o["updateTime"]).date()
         == datetime.now().date()  # pd.Timestamp(end_time).date()
-    ]
+    ] + [o for o in all_orders if o["symbol"] == sym and o["state"] in ("Triggered")]
 
     # Closed orders executed on end_time's date
     # end_date = pd.Timestamp(end_time).date()
@@ -156,6 +156,7 @@ def _get_orders(target_acc, symbol, start_time, end_time):
     #     # and pd.to_datetime(o["updateTime"]).date() == end_date
     # ]
     # print(f"{len(closed_orders)} closedn orders found.")
+    # return [o for o in all_orders if o["symbol"] == sym]
     return open_orders + closed_orders
 
 
@@ -595,12 +596,17 @@ def main() -> None:
 
         # let's load orders with start_ts and end_ts
         orders = (
-            _get_orders(target_acc, symbol, start_time=start_ts, end_time=end_ts)
+            _get_orders(
+                target_acc,
+                symbol,
+                start_time=start_ts,
+                end_time=end_ts,
+            )
             if target_acc and show_orders
             else []
         )
         activities = (
-            _get_activiies(target_acc, symbol, start_time=start_ts, end_time=end_ts)
+            _get_activities(target_acc, symbol, start_time=start_ts, end_time=end_ts)
             if target_acc and show_activities
             else []
         )
@@ -681,7 +687,7 @@ def main() -> None:
 
     # Additional overlay to chart
     open_orders = [o for o in orders if o.get("state") != "Executed"]
-    executed_orders = [o for o in orders if o.get("state") == "Executed"]
+    executed_orders = [o for o in orders if o.get("state") in ["Executed", "Triggered"]]
     if show_orders:
         plot_orders(fig, open_orders)
     if show_activities:
