@@ -18,6 +18,11 @@ def main() -> None:
                 icon=":material/dashboard:",
             ),
             st.Page(
+                "pages/positions.py",
+                title="positions",
+                icon=":material/dashboard:",
+            ),
+            st.Page(
                 "pages/candles.py",
                 title="Candles",
                 icon=":material/candlestick_chart:",

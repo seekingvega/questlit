@@ -36,8 +36,12 @@ def load_positions(account_id: str | None = None) -> list[dict]:
 
 
 @st.cache_data(ttl=60)
-def load_balances() -> list[dict]:
-    return QuestradeClient().get_all_balances()
+def load_balances(account_id: str | None = None) -> list[dict]:
+    return (
+        QuestradeClient().get_balances(account_id)
+        if account_id
+        else QuestradeClient().get_all_balances()
+    )
 
 
 @st.cache_data(ttl=60)

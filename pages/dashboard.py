@@ -11,7 +11,7 @@ from questlit.ui.data import (
     load_orders,
     load_positions,
 )
-from questlit.ui.formatting import currency_column_config
+from questlit.ui.formatting import currency_column_config, position_df_styler
 
 
 def _show_balance() -> None:
@@ -50,27 +50,78 @@ def main() -> None:
         if not positions:
             st.info("No open positions.")
         else:
+            df_pos = pd.DataFrame(positions)
             st.dataframe(
-                pd.DataFrame(positions),
+                position_df_styler(df_pos),
                 width="content",
                 hide_index=True,
                 height="content",
+                column_config=currency_column_config(df_pos),
             )
 
     with tab_orders:
-        cols = st.columns(2)
+        cols = st.columns((2, 2, 1, 2))
         if not target_acc:
             st.warning(f"please select account in sidebar :point_left:")
         else:
+            order_type = cols[0].selectbox("order type", ["Open", "All", "Closed"])
             start_date = (
-                cols[1].datetime_input(
-                    "start date", value=pd.Timestamp.now().normalize()
+                cols[3].datetime_input(
+                    "start date",
+                    value=pd.Timestamp.now().normalize() - pd.Timedelta(days=30),
                 )
-                if cols[1].toggle("use start date")
+                if cols[2].toggle("use start date", value=True)
                 else None
             )
-            orders = load_orders(target_acc, start_time=start_date)
-            st.dataframe(pd.DataFrame(orders), hide_index=True, height="content")
+            orders = load_orders(
+                target_acc, start_time=start_date, state_filter=order_type
+            )
+            order_cols = [
+                "symbol",
+                "totalQuantity",
+                "openQuantity",
+                "filledQuantity",
+                "canceledQuantity",
+                "side",
+                "orderType",
+                "limitPrice",
+                "stopPrice",
+                "avgExecPrice",
+                "timeInForce",
+                "state",
+                "rejectionReason",
+                "updateTime",
+                "creationTime",
+            ]
+            df_orders = pd.DataFrame(orders)[order_cols].sort_values(
+                ["updateTime", "creationTime"], ascending=False
+            )
+            state_filter = cols[1].multiselect(
+                "Order State",
+                options=df_orders["state"].unique(),
+                default=(
+                    [
+                        s
+                        for s in df_orders["state"].unique()
+                        if s in ["Accepted", "ContingentOrder"]
+                    ]
+                    if order_type == "Open"
+                    else df_orders["state"].unique()
+                ),
+            )
+            symbol_filter = cols[0].selectbox(
+                "symbol filter", options=[""] + df_orders["symbol"].unique().tolist()
+            )
+            orders_filter = df_orders["state"].isin(state_filter)
+            orders_filter &= (
+                (df_orders["symbol"] == symbol_filter) if symbol_filter else True
+            )
+            st.dataframe(
+                df_orders[orders_filter],
+                hide_index=True,
+                height="content",
+                column_config=currency_column_config(df_orders),
+            )
 
     with tab_activities:
         if not target_acc:
