@@ -137,7 +137,7 @@ def _get_orders(target_acc, symbol, start_time, end_time):
         and o["state"] in ("Executed")
         and pd.to_datetime(o["updateTime"]).date()
         == datetime.now().date()  # pd.Timestamp(end_time).date()
-    ] + [o for o in all_orders if o["symbol"] == sym and o["state"] in ("Triggered")]
+    ]  # + [o for o in all_orders if o["symbol"] == sym and o["state"] in ("Triggered")]
 
     # Closed orders executed on end_time's date
     # end_date = pd.Timestamp(end_time).date()
@@ -447,15 +447,15 @@ def main() -> None:
         charting_cofig_container = st.expander(f"Charting", icon=":material/settings:")
 
     # candles data input
-    cols = st.columns([2, 2, 1, 2, 2])
+    cols = st.columns([2, 1, 1, 2, 2])
     symbol = (
         cols[0]
         .text_input(
-            "Symbol",
-            value="AAPL",
+            "Symbol `cmd + /`",
+            # value="AAPL",
             key="symbol",
             bind="query-params",
-            placeholder="cmd+/",
+            placeholder="enter US/CA ticker here (e.g. AAPL, XIU.TO)",
         )
         .strip()
         .upper()
@@ -600,7 +600,8 @@ def main() -> None:
                 target_acc,
                 symbol,
                 start_time=start_ts,
-                end_time=end_ts,
+                end_time=end_ts
+                + pd.Timedelta(days=1),  # add an extra day to see orders entered today
             )
             if target_acc and show_orders
             else []
