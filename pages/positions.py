@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import numpy as np
 import pandas as pd
 import streamlit as st
 
@@ -42,13 +43,46 @@ def add_stop_orders(df_pos, df_orders):
     return df_pos
 
 
-def add_activities(df_pos, df_activities):
+def add_activities(df_pos, df_activities, end_ts):
     df_pos["buy_order_count"] = 0
-    df_pos["dividends_collected"] = 0
+    df_pos["dividends_collected"] = 0.0
     df_pos["days_invested"] = 0
+    end_naive = (
+        pd.Timestamp(end_ts).tz_localize(None)
+        if pd.Timestamp(end_ts).tzinfo
+        else pd.Timestamp(end_ts)
+    )
     for i, sym in zip(df_pos.index.tolist(), df_pos["symbol"].tolist()):
         _dfa = df_activities[df_activities["symbol"] == sym]
-        df_pos.at[i, "buy_order_count"] = len(_dfa[_dfa["action"] == "Buy"])
+        _buys = _dfa[_dfa["action"] == "Buy"]
+        df_pos.at[i, "buy_order_count"] = len(_buys)
+        df_pos.at[i, "dividends_collected"] = _dfa.loc[
+            _dfa["type"] == "Dividends", "netAmount"
+        ].sum()
+        if len(_buys):
+            first_buy = (
+                pd.to_datetime(_buys["tradeDate"], utc=True).dt.tz_localize(None).min()
+            )
+            df_pos.at[i, "days_invested"] = (end_naive - first_buy).days
+
+    # computing Dividend Yield
+    principal = df_pos["openQuantity"] * df_pos["averageEntryPrice"]
+    t_years = df_pos["days_invested"] / 365.0
+    valid = (t_years > 0) & (principal > 0)
+    yld = pd.Series(np.nan, index=df_pos.index)
+    yld[valid] = (
+        np.log1p(df_pos.loc[valid, "dividends_collected"] / principal[valid])
+        / t_years[valid]
+    )
+    df_pos["dividend_yield"] = yld
+
+    # compute Captial Gain
+    ratio = df_pos["currentPrice"] / df_pos["averageEntryPrice"]
+    cg = pd.Series(np.nan, index=df_pos.index)
+    cg_valid = valid & (ratio > 0)
+    cg[cg_valid] = np.log(ratio[cg_valid]) / t_years[cg_valid]
+    # df_pos["capital_gain"] = cg
+    df_pos["capital_return"] = ratio - 1
     return df_pos
 
 
@@ -157,7 +191,7 @@ def main() -> None:
         else:
             hidden_col = ["dayPnl", "totalCost", "isUnderReorg"]
             df_pos = add_stop_orders(pd.DataFrame(positions), pd.DataFrame(orders))
-            df_pos = add_activities(df_pos, pd.DataFrame(activities))
+            df_pos = add_activities(df_pos, pd.DataFrame(activities), end_ts)
             df_pos = df_pos.drop(columns=hidden_col).sort_values(
                 by=["currentMarketValue"]
             )
@@ -167,13 +201,39 @@ def main() -> None:
                 hide_index=True,
                 height="content",
                 column_config=currency_column_config(df_pos)
-                | {"stopProfitPct": st.column_config.NumberColumn(format="percent")},
+                | {
+                    "stopProfitPct": st.column_config.NumberColumn(format="percent"),
+                    "dividend_yield": st.column_config.NumberColumn(
+                        format="percent",
+                        help=(
+                            "Continuously-compounded yield: ln(1 + divs/principal) / t. "
+                            "t bounded by sidebar Range — older positions undercounted."
+                        ),
+                    ),
+                    "capital_return": st.column_config.NumberColumn(
+                        format="percent",
+                        help="simple return (i.e. NOT annualized)",
+                        # help=(
+                        #     "Annualized continuously-compounded price return: "
+                        #     "ln(currentPrice/averageEntryPrice) / t. "
+                        #     "t bounded by sidebar Range — older positions overstated."
+                        # ),
+                    ),
+                },
             )
+    df_orders = pd.DataFrame(orders)
+    df_activities = pd.DataFrame(activities)
     with tab_orders:
-        st.dataframe(pd.DataFrame(orders))
+        st.dataframe(df_orders)
     with tab_activities:
-        st.dataframe(pd.DataFrame(activities))
+        st.dataframe(df_activities)
 
+    closed_sym = [
+        s
+        for s in df_activities["symbol"].unique()
+        if s not in df_pos["symbol"].unique()
+    ]
+    select_closed_sym = st.sidebar.selectbox("Closed Symbols", options=closed_sym)
     select_pos_sym = st.sidebar.selectbox(
         "Select Position", options=df_pos["symbol"].unique().tolist()
     )

@@ -37,11 +37,15 @@ def currency_column_config(
 
 
 def position_df_styler(df: pd.DataFrame):
-    pnl_col = [c for c in df.columns if c.endswith("Pnl") or c in ["stopProfitPct"]]
+    pnl_col = [
+        c
+        for c in df.columns
+        if c.endswith(("Pnl", "_yield", "_return")) or c in ["stopProfitPct"]
+    ]
     warn_col = [c for c in df.columns if c in ["uncoveredQuantity"]]
 
     def _color_pnl(val):
-        color = "green" if val > 0 else "red"
+        color = "green" if val > 0 else "red" if val < 0 else "black"
         return f"color: {color};"  # background-color: {"lightgreen" if val > 0 else "lightcoral"};'
 
     def _warn_col(val, threshold: float = 0):
