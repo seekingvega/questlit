@@ -2,11 +2,14 @@
 
 from __future__ import annotations
 
+from datetime import timedelta
+
 import numpy as np
 import pandas as pd
 import streamlit as st
+from millify import millify, prettify
 
-from pages.candles import _parse_range
+from pages.candles import _parse_range, get_st_app_url
 from questlit.ui.data import (
     load_activities,
     load_balances,
@@ -86,40 +89,168 @@ def add_activities(df_pos, df_activities, end_ts):
     return df_pos
 
 
-def show_activities(symbol: str, df_pos: pd.DataFrame, df_activities: pd.DataFrame):
+def show_activities(
+    symbol: str, df_pos: pd.DataFrame, df_activities: pd.DataFrame, st_container=None
+):
     """show buys, sells (PnL), days-in position, dividends collected"""
-    tab_trades, tab_divs = st.tabs(["Trades", "Dividends"])
+    df_pos = df_pos[df_pos["symbol"] == symbol]
+    is_open = len(df_pos) > 0
+    if is_open:
+        assert (
+            len(df_pos) == 1
+        ), f"Expected 1 open position for {symbol}, got {len(df_pos)}"
+        pos_dict = df_pos.to_dict(orient="records")[0] if is_open else {}
+
+    # organize df_activities
     _dfa = df_activities[df_activities["symbol"] == symbol]
+    df_buys = _dfa[_dfa["action"] == "Buy"]
+    df_sells = _dfa[_dfa["action"] == "Sell"]
+    df_divs = _dfa[_dfa["type"] == "Dividends"]
+    days = (
+        pos_dict["days_invested"]
+        if is_open
+        else (
+            pd.to_datetime(df_sells["tradeDate"].max())
+            - pd.to_datetime(df_buys["tradeDate"].min())
+        ).days
+    )
+    qty = pos_dict["openQuantity"] if is_open else df_buys["quantity"].sum()
+    close_qty = qty if is_open else -df_sells["quantity"].sum()
+    if close_qty != qty or qty == 0 or days <= 0:
+        if st_container:
+            st_container.warning(
+                f"{symbol}: close quantity {close_qty} doesn't match open quantity {qty} or days invested ({days}) must be positive; Try increasing Date Range to get missing trades & activities."
+            )
+            return
+        else:
+            raise ValueError(
+                f"close quantity {close_qty} doesn't match open quantity {qty}"
+            )
+
+    avg_cost = (
+        pos_dict["averageEntryPrice"] * pos_dict["openQuantity"]
+        if is_open
+        else (df_buys["price"] * df_buys["quantity"]).sum()
+    )
+    last_value = (
+        pos_dict["currentPrice"] * pos_dict["openQuantity"]
+        if is_open
+        else (df_sells["price"] * df_sells["quantity"]).sum() * -1
+    )
+    div_paid = df_divs["netAmount"].sum()
+    div_yield = np.log1p(div_paid / avg_cost) / (days / 365)
+    pnl = last_value - avg_cost + div_paid
+    avg_price = avg_cost / (
+        pos_dict["openQuantity"] if is_open else df_buys["quantity"].sum()
+    )
+    last_price = last_value / (
+        pos_dict["openQuantity"] if is_open else -df_sells["quantity"].sum()
+    )
+    last_date = None if is_open else pd.to_datetime(df_sells["tradeDate"].max()).date()
+
+    # getting candle url
+    candle_qp = st.query_params.to_dict() | {"symbol": symbol}
+    if last_date:
+        candle_qp["end"] = last_date + timedelta(days=1)
+    else:
+        candle_qp.pop("end", None)
+    candle_url = get_st_app_url(qp=candle_qp).replace("positions", "candles")
+
+    tab_dash, tab_trades, tab_divs = st_container.tabs(
+        ["Overview", "Trades", "Dividends"]
+    )
+
+    with tab_dash:
+        # st.write(candle_url)
+
+        cols = st.columns(4)
+        # display_dict = {
+        #     "symbol": f"[{symbol}]({candle_url})",
+        #     "days invested": days,
+        #     "status": ":green[open]" if is_open else f":gray[closed]",
+        #     "$ invested": prettify(f"{avg_cost:.1f}"),
+        #     "$ Last": prettify(f"{last_value:.1f}"),
+        #     "$ Dividend Paid": prettify(f"{div_paid:.1f}"),
+        #     "PnL": prettify(f"{pnl:.1f}"),
+        #     "Div Yield": f"{div_paid/avg_cost:.1%}",
+        #     "Total Return": f"{pnl/avg_cost:.1%}",
+        # }
+        # for i, (k, v) in enumerate(display_dict.items()):
+        #     cols[i % len(cols)].metric(k, v)
+        #     # if k:
+        #     #     cols[i % len(cols)].metric(k, v)
+        #     # else:
+        #     #     cols[i % len(cols)].write("nothing")
+
+        l_metrics = [
+            {
+                "label": "symbol",
+                "value": f"[{symbol}]({candle_url})",
+                "delta": f"{qty} shares",
+                "delta_color": "off",
+                "delta_arrow": "off",
+            },
+            {"label": "Average Price", "value": prettify(f"{avg_price:.2f}")},
+            {
+                "label": "Last Price",
+                "value": prettify(f"{last_price:.2f}"),
+                "delta": f"{pnl/avg_cost:.1%}",
+                "help": f"total return (including div): {pnl/avg_cost:.1%}",
+            },
+            {
+                "label": "$ Dividend Paid",
+                "value": prettify(f"{div_paid:.1f}"),
+                "delta": f"{div_yield:.1%}",
+                "help": f"div yield: {div_yield:.1%}",
+            },
+            {
+                "label": "days invested",
+                "value": days,
+                "delta": "open" if is_open else "closed",
+                "delta_color": "green" if is_open else "gray",
+                "delta_arrow": "off",
+                "help": "only reflects open quantity" if is_open else "",
+            },
+            # {
+            #     "label": "status",
+            #     "value": ":green[open]" if is_open else f":gray[closed]",
+            # },
+            {"label": "$ invested", "value": prettify(f"{avg_cost:.1f}")},
+            {
+                "label": "$ Last",
+                "value": prettify(f"{last_value:.1f}"),
+                "delta": prettify(f"{pnl:.1f}"),
+            },
+        ]
+        for i, m in enumerate(l_metrics):
+            cols[i % len(cols)].metric(**m)
+
     with tab_trades:
-        st.write(_dfa[_dfa["action"] == "Buy"])
-        st.write(_dfa[_dfa["action"] == "Sell"])
+        st.write(df_buys)
+        st.write(df_sells)
     with tab_divs:
-        st.write(_dfa[_dfa["type"] == "Dividends"])
+        st.write(df_divs)
 
 
 def main() -> None:
     # account selection
     accounts = st.session_state["accounts"]
-    acc_dict = {f"{a['number']} ({a['type']})": a["number"] for a in accounts}
+    acc_dict = st.session_state["accounts_dict"]
     with st.sidebar:
-        select_acc = st.selectbox(
+        target_acc = st.selectbox(
             "Account",
             help="select an account to view past trades for your Symbol",
             options=[""] + list(acc_dict.keys()),
+            format_func=lambda x: f"{x}-{acc_dict[x]}" if x else "",
             key="account",
             bind="query-params",
         )
-        target_acc = acc_dict[select_acc] if select_acc else None
         info_container = st.expander("Accounts")
     info_container.dataframe(pd.DataFrame(accounts), hide_index=True)
 
-    if not select_acc:
+    if not target_acc:
         st.warning(f"please select an account to continue :point_left:")
         st.stop()
-
-    # tab_pos, tab_orders, tab_activities, tab_balance = st.tabs(
-    #     ["Positions", "Orders", "Activities", "Balance"]
-    # )
 
     # Show Balance
     balance_container = st.sidebar.expander("Balance")
@@ -129,7 +260,6 @@ def main() -> None:
         balance_container.dataframe(
             df_b, hide_index=True, column_config=currency_column_config(df_b)
         )
-        # balance_container.write(balance["perCurrencyBalances"])
 
     # Dates Setup
     dates_container = st.sidebar.expander("Dates", expanded=True)
@@ -233,11 +363,17 @@ def main() -> None:
         for s in df_activities["symbol"].unique()
         if s not in df_pos["symbol"].unique()
     ]
-    select_closed_sym = st.sidebar.selectbox("Closed Symbols", options=closed_sym)
+    # select_closed_sym = st.sidebar.selectbox("Closed Symbols", options=closed_sym)
     select_pos_sym = st.sidebar.selectbox(
-        "Select Position", options=df_pos["symbol"].unique().tolist()
+        "Select Position to View :point_right:",
+        options=df_pos["symbol"].unique().tolist(),
     )
-    show_activities(select_pos_sym, df_pos, pd.DataFrame(activities))
+    show_activities(
+        select_pos_sym,
+        df_pos=df_pos,
+        df_activities=pd.DataFrame(activities),
+        st_container=st.expander(f"Position View for {select_pos_sym}", expanded=True),
+    )
 
 
 main()
