@@ -57,4 +57,5 @@ def ensure_authenticated() -> list[dict]:
         st.stop()
 
     st.session_state["accounts"] = accounts
+    st.session_state["accounts_dict"] = {a["number"]: a["type"] for a in accounts}
     return accounts
