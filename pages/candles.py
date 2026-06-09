@@ -2,10 +2,8 @@
 
 from __future__ import annotations
 
-import re
 from cmath import e
 from datetime import datetime, timedelta
-from urllib.parse import urlencode
 
 import pandas as pd
 import plotly.graph_objects as go
@@ -20,6 +18,7 @@ from questlit.ui.charting import (
     add_volume_profile,
     plot_moving_averages,
 )
+from questlit.ui.controls import _parse_range, get_st_app_url
 from questlit.ui.data import (
     load_activities,
     load_candles,
@@ -35,41 +34,10 @@ from questlit.ui.ta_utils import (
 )
 
 _INTERVALS = ["OneMinute", "FiveMinutes", "OneHour", "OneDay", "OneWeek"]
-_RANGE_PATTERN = re.compile(r"^\s*(\d+)\s*([dwmy])\s*$", re.IGNORECASE)
 _MKT_STRUCTURE_PERIOD_DICT = {
     "OneDay": 40,  # about 2 months, out of 6
     "OneWeek": 32,  # about 8 months, out of 24
 }
-
-
-def _parse_range(s: str, end: pd.Timestamp) -> pd.Timestamp | None:
-    """Subtract a relative range string from ``end`` to get a start timestamp.
-
-    Accepts ``Nd`` (days), ``Nw`` (weeks), ``Nm`` (months), ``Ny`` (years),
-    case-insensitive. Months and years use ``pd.DateOffset`` so they're
-    calendar-aware. Returns ``None`` on parse failure.
-
-    Examples:
-        >>> e = pd.Timestamp("2026-04-30")
-        >>> _parse_range("3m", e)
-        Timestamp('2026-01-30 00:00:00')
-        >>> _parse_range("10d", e)
-        Timestamp('2026-04-20 00:00:00')
-        >>> _parse_range("bogus", e) is None
-        True
-    """
-    m = _RANGE_PATTERN.match(s)
-    if not m:
-        return None
-    n = int(m.group(1))
-    unit = m.group(2).lower()
-    if unit == "d":
-        return end - pd.Timedelta(days=n)
-    if unit == "w":
-        return end - pd.Timedelta(weeks=n)
-    if unit == "m":
-        return end - pd.DateOffset(months=n)
-    return end - pd.DateOffset(years=n)
 
 
 def _parse_ema_periods(s: str) -> list[int]:
@@ -421,12 +389,6 @@ def plot_ohlc(
         xaxis_rangeslider_visible=False,
     )
     return fig
-
-
-def get_st_app_url(qp: dict = st.query_params.to_dict()):
-    qs = urlencode(qp, doseq=True)
-    base = st.context.url.split("?")[0].split("#")[0]
-    return f"{base}?{qs}" if qs else base
 
 
 def main() -> None:

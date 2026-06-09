@@ -2,21 +2,18 @@
 
 from __future__ import annotations
 
-from datetime import timedelta
-
 import numpy as np
 import pandas as pd
 import streamlit as st
-from millify import millify, prettify
 
-from pages.candles import _parse_range, get_st_app_url
+from questlit.ui.controls import account_dates_sidebar
 from questlit.ui.data import (
     load_activities,
-    load_balances,
     load_orders,
     load_positions,
 )
 from questlit.ui.formatting import currency_column_config, position_df_styler
+from questlit.ui.trades import show_activities
 
 
 def add_stop_orders(df_pos, df_orders):
@@ -32,7 +29,7 @@ def add_stop_orders(df_pos, df_orders):
         # print(_dfo)
         sell_q = _dfo["openQuantity"].sum()
         sell_p = (_dfo["openQuantity"] * _dfo["stopPrice"]).sum() / sell_q
-        print(f"{sym}: {len(_dfo)} orders, stoplimit {sell_q} shares at {sell_p}")
+        # print(f"{sym}: {len(_dfo)} orders, stoplimit {sell_q} shares at {sell_p}")
 
         df_pos.at[i, "stopQuantity"] = sell_q
         df_pos.at[i, "stopPrice"] = sell_p
@@ -40,7 +37,7 @@ def add_stop_orders(df_pos, df_orders):
     for c in ["stopQuantity", "stopPrice"]:
         df_pos[c] = df_pos[c].astype(float)
     df_pos["stopQuantity"] = df_pos["stopQuantity"].astype("Int64")
-    print(df_pos["openQuantity"].dtype)
+    # print(df_pos["openQuantity"].dtype)
     df_pos["uncoveredQuantity"] = df_pos["openQuantity"] - df_pos["stopQuantity"]
     df_pos["stopProfitPct"] = df_pos["stopPrice"] / df_pos["averageEntryPrice"] - 1
     return df_pos
@@ -89,206 +86,8 @@ def add_activities(df_pos, df_activities, end_ts):
     return df_pos
 
 
-def show_activities(
-    symbol: str, df_pos: pd.DataFrame, df_activities: pd.DataFrame, st_container=None
-):
-    """show buys, sells (PnL), days-in position, dividends collected"""
-    df_pos = df_pos[df_pos["symbol"] == symbol]
-    is_open = len(df_pos) > 0
-    if is_open:
-        assert (
-            len(df_pos) == 1
-        ), f"Expected 1 open position for {symbol}, got {len(df_pos)}"
-        pos_dict = df_pos.to_dict(orient="records")[0] if is_open else {}
-
-    # organize df_activities
-    _dfa = df_activities[df_activities["symbol"] == symbol]
-    df_buys = _dfa[_dfa["action"] == "Buy"]
-    df_sells = _dfa[_dfa["action"] == "Sell"]
-    df_divs = _dfa[_dfa["type"] == "Dividends"]
-    days = (
-        pos_dict["days_invested"]
-        if is_open
-        else (
-            pd.to_datetime(df_sells["tradeDate"].max())
-            - pd.to_datetime(df_buys["tradeDate"].min())
-        ).days
-    )
-    qty = pos_dict["openQuantity"] if is_open else df_buys["quantity"].sum()
-    close_qty = qty if is_open else -df_sells["quantity"].sum()
-    if close_qty != qty or qty == 0 or days <= 0:
-        if st_container:
-            st_container.warning(
-                f"{symbol}: close quantity {close_qty} doesn't match open quantity {qty} or days invested ({days}) must be positive; Try increasing Date Range to get missing trades & activities."
-            )
-            return
-        else:
-            raise ValueError(
-                f"close quantity {close_qty} doesn't match open quantity {qty}"
-            )
-
-    avg_cost = (
-        pos_dict["averageEntryPrice"] * pos_dict["openQuantity"]
-        if is_open
-        else (df_buys["price"] * df_buys["quantity"]).sum()
-    )
-    last_value = (
-        pos_dict["currentPrice"] * pos_dict["openQuantity"]
-        if is_open
-        else (df_sells["price"] * df_sells["quantity"]).sum() * -1
-    )
-    div_paid = df_divs["netAmount"].sum()
-    div_yield = np.log1p(div_paid / avg_cost) / (days / 365)
-    pnl = last_value - avg_cost + div_paid
-    avg_price = avg_cost / (
-        pos_dict["openQuantity"] if is_open else df_buys["quantity"].sum()
-    )
-    last_price = last_value / (
-        pos_dict["openQuantity"] if is_open else -df_sells["quantity"].sum()
-    )
-    last_date = None if is_open else pd.to_datetime(df_sells["tradeDate"].max()).date()
-
-    # getting candle url
-    candle_qp = st.query_params.to_dict() | {"symbol": symbol}
-    if last_date:
-        candle_qp["end"] = last_date + timedelta(days=1)
-    else:
-        candle_qp.pop("end", None)
-    candle_url = get_st_app_url(qp=candle_qp).replace("positions", "candles")
-
-    tab_dash, tab_trades, tab_divs = st_container.tabs(
-        ["Overview", "Trades", "Dividends"]
-    )
-
-    with tab_dash:
-        # st.write(candle_url)
-
-        cols = st.columns(4)
-        # display_dict = {
-        #     "symbol": f"[{symbol}]({candle_url})",
-        #     "days invested": days,
-        #     "status": ":green[open]" if is_open else f":gray[closed]",
-        #     "$ invested": prettify(f"{avg_cost:.1f}"),
-        #     "$ Last": prettify(f"{last_value:.1f}"),
-        #     "$ Dividend Paid": prettify(f"{div_paid:.1f}"),
-        #     "PnL": prettify(f"{pnl:.1f}"),
-        #     "Div Yield": f"{div_paid/avg_cost:.1%}",
-        #     "Total Return": f"{pnl/avg_cost:.1%}",
-        # }
-        # for i, (k, v) in enumerate(display_dict.items()):
-        #     cols[i % len(cols)].metric(k, v)
-        #     # if k:
-        #     #     cols[i % len(cols)].metric(k, v)
-        #     # else:
-        #     #     cols[i % len(cols)].write("nothing")
-
-        l_metrics = [
-            {
-                "label": "symbol",
-                "value": f"[{symbol}]({candle_url})",
-                "delta": f"{qty} shares",
-                "delta_color": "off",
-                "delta_arrow": "off",
-            },
-            {"label": "Average Price", "value": prettify(f"{avg_price:.2f}")},
-            {
-                "label": "Last Price",
-                "value": prettify(f"{last_price:.2f}"),
-                "delta": f"{pnl/avg_cost:.1%}",
-                "help": f"total return (including div): {pnl/avg_cost:.1%}",
-            },
-            {
-                "label": "$ Dividend Paid",
-                "value": prettify(f"{div_paid:.1f}"),
-                "delta": f"{div_yield:.1%}",
-                "help": f"div yield: {div_yield:.1%}",
-            },
-            {
-                "label": "days invested",
-                "value": days,
-                "delta": "open" if is_open else "closed",
-                "delta_color": "green" if is_open else "gray",
-                "delta_arrow": "off",
-                "help": "only reflects open quantity" if is_open else "",
-            },
-            # {
-            #     "label": "status",
-            #     "value": ":green[open]" if is_open else f":gray[closed]",
-            # },
-            {"label": "$ invested", "value": prettify(f"{avg_cost:.1f}")},
-            {
-                "label": "$ Last",
-                "value": prettify(f"{last_value:.1f}"),
-                "delta": prettify(f"{pnl:.1f}"),
-            },
-        ]
-        for i, m in enumerate(l_metrics):
-            cols[i % len(cols)].metric(**m)
-
-    with tab_trades:
-        st.write(df_buys)
-        st.write(df_sells)
-    with tab_divs:
-        st.write(df_divs)
-
-
 def main() -> None:
-    # account selection
-    accounts = st.session_state["accounts"]
-    acc_dict = st.session_state["accounts_dict"]
-    with st.sidebar:
-        target_acc = st.selectbox(
-            "Account",
-            help="select an account to view past trades for your Symbol",
-            options=[""] + list(acc_dict.keys()),
-            format_func=lambda x: f"{x}-{acc_dict[x]}" if x else "",
-            key="account",
-            bind="query-params",
-        )
-        info_container = st.expander("Accounts")
-    info_container.dataframe(pd.DataFrame(accounts), hide_index=True)
-
-    if not target_acc:
-        st.warning(f"please select an account to continue :point_left:")
-        st.stop()
-
-    # Show Balance
-    balance_container = st.sidebar.expander("Balance")
-    with balance_container:
-        balance = load_balances(target_acc)["perCurrencyBalances"]
-        df_b = pd.DataFrame(balance)
-        balance_container.dataframe(
-            df_b, hide_index=True, column_config=currency_column_config(df_b)
-        )
-
-    # Dates Setup
-    dates_container = st.sidebar.expander("Dates", expanded=True)
-    with dates_container:
-        end = st.date_input(
-            "End",
-            value=pd.Timestamp.now().date(),
-            key="end",
-            bind="query-params",
-            max_value=pd.Timestamp.now().date(),
-        )
-        range_str = st.text_input(
-            "Range",
-            value="1y",
-            key="range",
-            bind="query-params",
-            help="date range is used to search for orders and activities history for positions held",
-        )
-        end_ts = pd.Timestamp(end, hour=23, minute=59, second=59) + pd.Timedelta(days=1)
-        start_ts = _parse_range(range_str, end_ts)
-        if start_ts is None:
-            st.date_input("Start", value=end, disabled=True)
-            st.error(
-                f"Cannot parse range {range_str!r}. "
-                "Use formats like '7d', '2w', '6m', '1y'."
-            )
-            st.stop()
-
-        st.date_input("Start", value=start_ts.date(), disabled=True)
+    target_acc, start_ts, end_ts = account_dates_sidebar()
 
     positions = load_positions(account_id=target_acc)
     orders = load_orders(
