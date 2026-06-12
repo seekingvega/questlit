@@ -60,6 +60,21 @@ def get_st_app_url(qp: dict = st.query_params.to_dict()):
     return f"{base}?{qs}" if qs else base
 
 
+def tv_url(symbol: str) -> str:
+    symbol = symbol.upper()
+    if symbol.endswith((".TO", ".VN")):
+        if symbol.endswith(".TO"):
+            return (
+                f"https://www.tradingview.com/symbols/TSX-{symbol.replace('.TO','')}/"
+            )
+        else:
+            return (
+                f"https://www.tradingview.com/symbols/TSXV-{symbol.replace('.VN','')}/"
+            )
+    else:
+        return None
+
+
 def account_dates_sidebar() -> tuple[str, pd.Timestamp, pd.Timestamp]:
     """Render the Account / Balance / Dates sidebar shared across pages.
 

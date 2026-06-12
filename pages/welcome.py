@@ -1,7 +1,7 @@
 import streamlit as st
 import yaml
 
-from questlit.ui.controls import get_st_app_url
+from questlit.ui.controls import tv_url
 
 
 @st.cache_data(ttl=60)
@@ -28,21 +28,6 @@ def candle_url(symbol: str) -> str:
     ``candles`` so the link works from any page.
     """
     return f"{st.context.url}/candles?symbol={symbol}"
-
-
-def tv_url(symbol: str) -> str:
-    symbol = symbol.upper()
-    if symbol.endswith((".TO", ".VN")):
-        if symbol.endswith(".TO"):
-            return (
-                f"https://www.tradingview.com/symbols/TSX-{symbol.replace('.TO','')}/"
-            )
-        else:
-            return (
-                f"https://www.tradingview.com/symbols/TSXV-{symbol.replace('.VN','')}/"
-            )
-    else:
-        return None
 
 
 def main():

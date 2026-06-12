@@ -18,7 +18,7 @@ from questlit.ui.charting import (
     add_volume_profile,
     plot_moving_averages,
 )
-from questlit.ui.controls import _parse_range, get_st_app_url
+from questlit.ui.controls import _parse_range, get_st_app_url, tv_url
 from questlit.ui.data import (
     load_activities,
     load_candles,
@@ -693,6 +693,10 @@ def main() -> None:
                 f"market structure: {mkts_badge_dict[str_mkts]}",
                 help=f"{str_mkts} based on highs and lows computed from sliding window of {mkt_structure_int} bars",
             )
+    if symbol.upper().endswith((".TO", ".VN")):
+        etc_dis_container.markdown(
+            f"see {symbol.upper()} on [TradingView]({tv_url(symbol)})"
+        )
     if end_ts.date() != datetime.today().date():
         end_date_warning_container.badge(
             f"selected end date is not Today",
