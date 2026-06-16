@@ -1,7 +1,14 @@
 symbols:
+  - esp.to
+  - div.to
+  - bdt.to
+  - cs.to
   - bb.to
   - mda.to
   - vnp.to
+  - cls.to
+  - emax.to
+  - dir.un.to
   - ftg.to
   - grt.un.to
   - wcp.to
@@ -12,6 +19,7 @@ symbols:
   - cpx.to
   - tcs.to
   - pow.to
+  - dol.to
   - dsg.to
   - cgy.to
   - ala.to
@@ -19,3 +27,16 @@ symbols:
   - atz.to
   - cp.to
   - atd.to
+  - kbl.to
+  - well.to
+  - vmet.to
+  - cve.to
+  - hbm.to
+  - fcr.un.to
+  - mfi.to
+  - rus.to
+  - lnr.to
+  - cpkr.to
+  - arg.to
+  - tot.to
+  - cfw.to
