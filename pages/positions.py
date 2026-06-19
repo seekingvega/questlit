@@ -5,6 +5,7 @@ from __future__ import annotations
 import numpy as np
 import pandas as pd
 import streamlit as st
+from millify import prettify
 
 from questlit.ui.controls import account_dates_sidebar
 from questlit.ui.data import (
@@ -40,6 +41,9 @@ def add_stop_orders(df_pos, df_orders):
     # print(df_pos["openQuantity"].dtype)
     df_pos["uncoveredQuantity"] = df_pos["openQuantity"] - df_pos["stopQuantity"]
     df_pos["stopProfitPct"] = df_pos["stopPrice"] / df_pos["averageEntryPrice"] - 1
+    df_pos["CommittedRiskReward"] = (
+        df_pos["stopPrice"] - df_pos["averageEntryPrice"]
+    ) * df_pos["stopQuantity"]
     return df_pos
 
 
@@ -157,12 +161,9 @@ def main() -> None:
     with tab_activities:
         st.dataframe(df_activities)
 
-    closed_sym = [
-        s
-        for s in df_activities["symbol"].unique()
-        if s not in df_pos["symbol"].unique()
-    ]
-    # select_closed_sym = st.sidebar.selectbox("Closed Symbols", options=closed_sym)
+    str_crr = ":green-badge" if df_pos["CommittedRiskReward"].sum() >= 0 else ":red"
+    str_crr += f"[{prettify(int(df_pos['CommittedRiskReward'].sum()))}]"
+    st.caption(f"Total Committed Risk Rewards: {str_crr}")
     select_pos_sym = st.sidebar.selectbox(
         "Select Position to View :point_right:",
         options=df_pos["symbol"].unique().tolist(),

@@ -40,7 +40,8 @@ def position_df_styler(df: pd.DataFrame):
     pnl_col = [
         c
         for c in df.columns
-        if c.endswith(("Pnl", "_yield", "_return")) or c in ["stopProfitPct"]
+        if c.endswith(("Pnl", "_yield", "_return"))
+        or c in ["stopProfitPct", "CommittedRiskReward"]
     ]
     warn_col = [c for c in df.columns if c in ["uncoveredQuantity"]]
 

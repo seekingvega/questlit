@@ -1,6 +1,9 @@
 symbols:
   - esp.to
+  - xdiv.to
   - div.to
+  - eit.un.to
+  - bip.un.to
   - bdt.to
   - cs.to
   - bb.to
@@ -26,7 +29,7 @@ symbols:
   - csu.to
   - atz.to
   - cp.to
-  - atd.to
+  - cnr.to
   - kbl.to
   - well.to
   - vmet.to
