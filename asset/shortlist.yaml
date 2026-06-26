@@ -1,7 +1,10 @@
 symbols:
   - esp.to
+  - fcr.un.to
+  - ens.to
   - xdiv.to
   - div.to
+  - pic.a.to
   - eit.un.to
   - bip.un.to
   - bdt.to
@@ -23,11 +26,13 @@ symbols:
   - tcs.to
   - pow.to
   - dol.to
+  - atd.to
   - dsg.to
   - cgy.to
   - ala.to
   - csu.to
   - atz.to
+  - rus.to
   - cp.to
   - cnr.to
   - kbl.to
@@ -35,9 +40,7 @@ symbols:
   - vmet.to
   - cve.to
   - hbm.to
-  - fcr.un.to
   - mfi.to
-  - rus.to
   - lnr.to
   - cpkr.to
   - arg.to

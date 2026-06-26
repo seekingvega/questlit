@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import pandas as pd
 import streamlit as st
+from millify import prettify
 
 from questlit.ui.controls import account_dates_sidebar
 from questlit.ui.data import load_activities, load_positions
@@ -49,7 +50,7 @@ def main() -> None:
     activities = [
         a
         for a in load_activities(target_acc, start_time=start_ts, end_time=end_ts)
-        if a["type"] in ("Dividends", "Trades")
+        if a["type"] in ("Dividends", "Trades", "Interest")
     ]
     df_act = pd.DataFrame(activities)
     if df_act.empty:
@@ -70,11 +71,12 @@ def main() -> None:
     losers = complete[complete["realizedPnl"] <= 0].sort_values("realizedPnl")
     incomplete = summary[~summary["is_complete"]]
 
-    tab_w, tab_l, tab_i = st.tabs(
+    tab_w, tab_l, tab_i, tab_divs = st.tabs(
         [
             f"{len(winners)} Winners",
             f"{len(losers)} Losers",
             f"{len(incomplete)} Incomplete",
+            f"dividends",
         ]
     )
     with tab_w:
@@ -89,6 +91,50 @@ def main() -> None:
                 "sidebar Range to capture the missing trades."
             ),
         )
+    with tab_divs:
+        _show_table(
+            df_act[df_act["type"] == "Dividends"].drop(
+                columns=[
+                    "transactionDate",
+                    "settlementDate",
+                    "commission",
+                    "grossAmount",
+                    "symbolId",
+                ]
+            ),
+            caption=":yellow-badge[some dividends are generated from opened positions]",
+        )
+
+    # Show stats
+    cols = st.columns(4)
+    complete_pnl = (complete["proceeds"] - complete["cost"]).sum()
+    l_metrics = [
+        {
+            "label": "PnL",
+            "value": f":{'red' if complete_pnl<0 else 'green'}["
+            + prettify(f"{complete_pnl:.2f}")
+            + "]",
+        },
+        {
+            "label": "dividend collected",
+            "value": prettify(
+                f'{df_act[df_act["type"] == "Dividends"]["netAmount"].sum():.2f}'
+            ),
+        },
+        {"label": "Win Rate", "value": f"{len(winners)/len(complete):.2%}"},
+    ]
+    if "Interest" in df_act["type"].unique().tolist():
+        l_metrics.append(
+            {
+                "label": "Interest",
+                "help": "see the interest activities in the Overview Page",
+                "value": prettify(
+                    f'{df_act[df_act["type"] == "Interest"]["netAmount"].sum():.2f}'
+                ),
+            }
+        )
+    for i, m in enumerate(l_metrics):
+        cols[i % len(cols)].metric(**m)
 
     # Sidebar selectbox over all closed symbols, annotated with realized PnL.
     pnl_by_sym = summary.set_index("symbol")["realizedPnl"]
